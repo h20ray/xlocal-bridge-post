@@ -53,10 +53,20 @@ class Xlocal_Bridge_Receiver {
         if ( $raw_body === false ) {
             return new WP_REST_Response( array( 'success' => false, 'error' => 'empty_body' ), 400 );
         }
+        $max_kb = max( 64, intval( $options['receiver_max_payload_kb'] ) );
+        if ( strlen( $raw_body ) > ( $max_kb * 1024 ) ) {
+            return new WP_REST_Response( array( 'success' => false, 'error' => 'payload_too_large' ), 413 );
+        }
 
         $timestamp = isset( $_SERVER['HTTP_X_XLOCAL_TIMESTAMP'] ) ? intval( $_SERVER['HTTP_X_XLOCAL_TIMESTAMP'] ) : 0;
         $nonce = isset( $_SERVER['HTTP_X_XLOCAL_NONCE'] ) ? sanitize_text_field( $_SERVER['HTTP_X_XLOCAL_NONCE'] ) : '';
         $signature = isset( $_SERVER['HTTP_X_XLOCAL_SIGNATURE'] ) ? sanitize_text_field( $_SERVER['HTTP_X_XLOCAL_SIGNATURE'] ) : '';
+        $origin_host = isset( $_SERVER['HTTP_X_XLOCAL_ORIGIN_HOST'] ) ? sanitize_text_field( $_SERVER['HTTP_X_XLOCAL_ORIGIN_HOST'] ) : '';
+        $local_host = wp_parse_url( home_url(), PHP_URL_HOST );
+
+        if ( $origin_host !== '' && $local_host && strtolower( $origin_host ) === strtolower( $local_host ) ) {
+            return new WP_REST_Response( array( 'success' => false, 'error' => 'self_origin_rejected' ), 409 );
+        }
 
         if ( ! self::verify_timestamp_nonce( $timestamp, $nonce, $options ) ) {
             return new WP_REST_Response( array( 'success' => false, 'error' => 'invalid_timestamp_or_nonce' ), 401 );
@@ -65,6 +75,7 @@ class Xlocal_Bridge_Receiver {
         if ( ! self::verify_signature( $secret, $timestamp, $nonce, $raw_body, $signature ) ) {
             return new WP_REST_Response( array( 'success' => false, 'error' => 'invalid_signature' ), 401 );
         }
+        self::remember_nonce( $nonce, $options );
 
         $payload = json_decode( $raw_body, true );
         if ( ! is_array( $payload ) ) {
@@ -116,13 +127,20 @@ class Xlocal_Bridge_Receiver {
             return false;
         }
 
-        $ttl = max( 60, intval( $options['receiver_nonce_ttl'] ) );
         $nonce_key = self::NONCE_PREFIX . md5( $nonce );
         if ( get_transient( $nonce_key ) ) {
             return false;
         }
-        set_transient( $nonce_key, 1, $ttl );
         return true;
+    }
+
+    private static function remember_nonce( $nonce, $options ) {
+        if ( empty( $nonce ) ) {
+            return;
+        }
+        $ttl = max( 60, intval( $options['receiver_nonce_ttl'] ) );
+        $nonce_key = self::NONCE_PREFIX . md5( $nonce );
+        set_transient( $nonce_key, 1, $ttl );
     }
 
     private static function check_ip_allowlist( $options ) {
@@ -202,6 +220,12 @@ class Xlocal_Bridge_Receiver {
     }
 
     private static function upsert_post( $payload, $options ) {
+        $ingest_id = sanitize_text_field( $payload['ingest_id'] );
+        $existing_by_ingest = self::find_post_by_meta( '_xlocal_ingest_id', $ingest_id, $options['receiver_default_post_type'] );
+        if ( $existing_by_ingest ) {
+            return array( 'post_id' => $existing_by_ingest, 'action' => 'noop_duplicate' );
+        }
+
         $meta_key = $options['receiver_source_url_meta_key'];
         $source_url = esc_url_raw( $payload['source_url'] );
         $existing_id = 0;
@@ -231,6 +255,10 @@ class Xlocal_Bridge_Receiver {
         $status = $options['receiver_default_status'];
         if ( ! empty( $options['receiver_allow_sender_override_status'] ) && ! empty( $payload['status'] ) ) {
             $status = sanitize_key( $payload['status'] );
+        }
+        $allowed_statuses = array( 'publish', 'pending', 'draft' );
+        if ( ! in_array( $status, $allowed_statuses, true ) ) {
+            $status = 'pending';
         }
 
         $author_id = self::resolve_author( $payload, $options );
@@ -267,7 +295,7 @@ class Xlocal_Bridge_Receiver {
             return $post_id;
         }
 
-        update_post_meta( $post_id, '_xlocal_ingest_id', sanitize_text_field( $payload['ingest_id'] ) );
+        update_post_meta( $post_id, '_xlocal_ingest_id', $ingest_id );
         update_post_meta( $post_id, $meta_key, $source_url );
         if ( ! empty( $payload['source_hash'] ) ) {
             update_post_meta( $post_id, '_xlocal_source_hash', sanitize_text_field( $payload['source_hash'] ) );
@@ -428,7 +456,7 @@ class Xlocal_Bridge_Receiver {
         $allowed = self::allowed_tags_profile( $options );
         $html = wp_kses( $html, $allowed );
         if ( $options['receiver_strip_inline_styles'] ) {
-            $html = preg_replace( '/\sstyle="[^"]*"/i', '', $html );
+            $html = preg_replace( '/\sstyle=("|\')[^"\']*("|\')/i', '', $html );
         }
         return $html;
     }
@@ -465,6 +493,7 @@ class Xlocal_Bridge_Receiver {
                 'post_status' => 'any',
                 'posts_per_page' => 1,
                 'fields' => 'ids',
+                'no_found_rows' => true,
                 'meta_query' => array(
                     array(
                         'key' => $meta_key,
@@ -486,6 +515,7 @@ class Xlocal_Bridge_Receiver {
                 'post_status' => 'any',
                 'posts_per_page' => 1,
                 'fields' => 'ids',
+                'no_found_rows' => true,
                 'meta_query' => array(
                     array(
                         'key' => $meta_key_a,

@@ -25,8 +25,9 @@ class Xlocal_Bridge_Settings {
             'receiver_clock_skew' => 300,
             'receiver_nonce_ttl' => 600,
             'receiver_ip_allowlist' => '',
-            'receiver_rate_limit' => 0,
+            'receiver_rate_limit' => 60,
             'receiver_require_tls' => 1,
+            'receiver_max_payload_kb' => 512,
             'receiver_default_post_type' => 'post',
             'receiver_default_status' => 'pending',
             'receiver_allow_sender_override_status' => 0,
@@ -55,9 +56,11 @@ class Xlocal_Bridge_Settings {
             'sender_main_base_url' => '',
             'sender_ingest_path' => '/wp-json/xlocal/v1/ingest',
             'sender_secret' => '',
+            'sender_auto_send' => 0,
             'sender_timeout' => 15,
             'sender_max_retries' => 3,
             'sender_backoff_base_ms' => 500,
+            'sender_max_payload_kb' => 512,
             'sender_target_post_type' => 'post',
             'sender_default_status' => 'pending',
             'sender_include_author' => 0,
@@ -118,7 +121,31 @@ class Xlocal_Bridge_Settings {
     public static function sanitize_options( $input ) {
         $defaults = self::defaults();
         $output = array();
+        $checkbox_keys = array(
+            'receiver_enabled',
+            'receiver_require_tls',
+            'receiver_allow_sender_override_status',
+            'receiver_auto_create_categories',
+            'receiver_auto_create_tags',
+            'receiver_tag_normalization',
+            'receiver_reject_non_allowed_media',
+            'receiver_sanitize_html',
+            'receiver_strip_inline_styles',
+            'receiver_strip_scripts_iframes',
+            'receiver_enable_log',
+            'sender_auto_send',
+            'sender_include_author',
+            'sender_send_taxonomies',
+            'sender_ensure_cdn_urls',
+            'sender_inject_dimensions',
+            'sender_dry_run',
+            'sender_debug_logs',
+        );
         foreach ( $defaults as $key => $value ) {
+            if ( ! isset( $input[ $key ] ) && in_array( $key, $checkbox_keys, true ) ) {
+                $output[ $key ] = 0;
+                continue;
+            }
             if ( ! isset( $input[ $key ] ) ) {
                 continue;
             }
@@ -141,7 +168,28 @@ class Xlocal_Bridge_Settings {
             }
             $output[ $key ] = $raw;
         }
-        return array_merge( $defaults, $output );
+
+        $merged = array_merge( $defaults, $output );
+        $merged['mode'] = in_array( $merged['mode'], array( 'receiver', 'sender', 'both' ), true ) ? $merged['mode'] : 'both';
+        $merged['receiver_default_status'] = in_array( $merged['receiver_default_status'], array( 'publish', 'pending', 'draft' ), true ) ? $merged['receiver_default_status'] : 'pending';
+        $merged['sender_default_status'] = in_array( $merged['sender_default_status'], array( 'publish', 'pending', 'draft' ), true ) ? $merged['sender_default_status'] : 'pending';
+        $merged['sender_sync_mode'] = in_array( $merged['sender_sync_mode'], array( 'immediate', 'batch' ), true ) ? $merged['sender_sync_mode'] : 'immediate';
+        $merged['sender_schedule_interval'] = in_array( $merged['sender_schedule_interval'], array( 'five_minutes', 'fifteen_minutes', 'hourly' ), true ) ? $merged['sender_schedule_interval'] : 'five_minutes';
+        $merged['receiver_default_post_type'] = sanitize_key( $merged['receiver_default_post_type'] );
+        $merged['sender_target_post_type'] = sanitize_key( $merged['sender_target_post_type'] );
+        $merged['sender_main_base_url'] = untrailingslashit( esc_url_raw( $merged['sender_main_base_url'] ) );
+        $merged['sender_ingest_path'] = '/' . ltrim( sanitize_text_field( $merged['sender_ingest_path'] ), '/' );
+        $merged['receiver_clock_skew'] = max( 30, min( 3600, intval( $merged['receiver_clock_skew'] ) ) );
+        $merged['receiver_nonce_ttl'] = max( 60, min( 86400, intval( $merged['receiver_nonce_ttl'] ) ) );
+        $merged['receiver_rate_limit'] = max( 0, intval( $merged['receiver_rate_limit'] ) );
+        $merged['receiver_max_payload_kb'] = max( 64, min( 10240, intval( $merged['receiver_max_payload_kb'] ) ) );
+        $merged['sender_timeout'] = max( 3, min( 120, intval( $merged['sender_timeout'] ) ) );
+        $merged['sender_max_retries'] = max( 0, min( 8, intval( $merged['sender_max_retries'] ) ) );
+        $merged['sender_backoff_base_ms'] = max( 100, min( 10000, intval( $merged['sender_backoff_base_ms'] ) ) );
+        $merged['sender_max_payload_kb'] = max( 64, min( 10240, intval( $merged['sender_max_payload_kb'] ) ) );
+        $merged['sender_batch_size'] = max( 1, min( 100, intval( $merged['sender_batch_size'] ) ) );
+
+        return $merged;
     }
 
     public static function enqueue_admin_assets( $hook ) {
@@ -150,8 +198,8 @@ class Xlocal_Bridge_Settings {
         }
         $base_url = plugin_dir_url( __FILE__ );
         $base_url = str_replace( '/includes', '', $base_url );
-        wp_enqueue_style( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.css', array(), '0.3.0' );
-        wp_enqueue_script( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.js', array(), '0.3.0', true );
+        wp_enqueue_style( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.css', array(), '0.4.0' );
+        wp_enqueue_script( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.js', array(), '0.4.0', true );
     }
 
     public static function render_settings_page() {
@@ -182,6 +230,10 @@ class Xlocal_Bridge_Settings {
                 'label' => 'Logs',
                 'desc' => 'Diagnostics and last push result.',
             ),
+            'documentation' => array(
+                'label' => 'Documentation',
+                'desc' => 'Step-by-step guide for non-technical users.',
+            ),
         );
 
         echo '<div class="wrap xlocal-admin">';
@@ -189,7 +241,7 @@ class Xlocal_Bridge_Settings {
         echo '<div class="xlocal-hero-text">';
         echo '<span class="xlocal-chip">Bridge</span>';
         echo '<h1>xLocal Bridge Post</h1>';
-        echo '<p>Unified Sender + Receiver settings with premium controls and clarity.</p>';
+        echo '<p>Unified Sender + Receiver settings with clarity and control.</p>';
         echo '</div>';
         echo '</div>';
 
@@ -197,9 +249,13 @@ class Xlocal_Bridge_Settings {
         echo '<form method="post" action="options.php" class="xlocal-card xlocal-elevated">';
         settings_fields( 'xlocal_bridge_post' );
 
-        echo '<div class="xlocal-tabs" role="tablist">';
+        echo '<div class="xlocal-tabs" role="tablist" aria-label="xLocal settings tabs">';
         foreach ( $tabs as $id => $tab ) {
-            printf( '<button type="button" class="xlocal-tab" data-tab="%s" role="tab">%s</button>', esc_attr( $id ), esc_html( $tab['label'] ) );
+            printf(
+                '<button type="button" class="xlocal-tab" data-tab="%1$s" id="xlocal-tab-%1$s" role="tab" aria-controls="xlocal-panel-%1$s" aria-selected="false" tabindex="-1">%2$s</button>',
+                esc_attr( $id ),
+                esc_html( $tab['label'] )
+            );
         }
         echo '</div>';
 
@@ -208,13 +264,17 @@ class Xlocal_Bridge_Settings {
         self::render_sender_tab();
         self::render_advanced_tab();
         self::render_logs_tab( $options['sender_last_push_result'] );
+        self::render_documentation_tab();
 
         submit_button();
         echo '</form>';
 
         echo '<div class="xlocal-card xlocal-side">';
+        echo '<section class="xlocal-side-section">';
         echo '<h2>Status</h2>';
         self::render_status_badges( $options );
+        echo '</section>';
+        echo '<section class="xlocal-side-section">';
         echo '<h2>Quick Checklist</h2>';
         echo '<ul>';
         echo '<li>Mode set correctly for this site.</li>';
@@ -223,6 +283,16 @@ class Xlocal_Bridge_Settings {
         echo '<li>Test payload succeeds.</li>';
         echo '</ul>';
         echo '<div class="xlocal-note"><strong>Tip:</strong> Use <code>wp-config.php</code> to lock the shared secret.</div>';
+        echo '</section>';
+        echo '<section class="xlocal-side-section">';
+        echo '<h2>About</h2>';
+        echo '<p>xLocal Bridge Post securely syncs content between WordPress sites with sender and receiver control.</p>';
+        echo '</section>';
+        echo '<section class="xlocal-side-section xlocal-author">';
+        echo '<h2>Author</h2>';
+        echo '<p><strong>Andoru Ray</strong></p>';
+        echo '<p><a href="mailto:andoru@tujuhcahaya.com">andoru@tujuhcahaya.com</a></p>';
+        echo '</section>';
         echo '</div>';
 
         echo '</div>';
@@ -230,7 +300,7 @@ class Xlocal_Bridge_Settings {
     }
 
     private static function render_overview_tab( $mode, $options ) {
-        echo '<div class="xlocal-tab-panel" data-tab-panel="overview">';
+        echo '<div class="xlocal-tab-panel" data-tab-panel="overview" id="xlocal-panel-overview" role="tabpanel" aria-labelledby="xlocal-tab-overview">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Overview</h2>';
         echo '<p>Choose how this site participates in the bridge.</p>';
@@ -251,10 +321,11 @@ class Xlocal_Bridge_Settings {
         echo '<td class="xlocal-help-cell"><span class="xlocal-help"><span class="xlocal-help-icon">i</span><span class="xlocal-help-text">Set Receiver on Main WP, Sender on Worker WP. Use Both only for testing.</span></span></td></tr>';
         echo '</table>';
         self::render_status_badges( $options );
+        echo '</div>';
     }
 
     private static function render_receiver_tab() {
-        echo '<div class="xlocal-tab-panel" data-tab-panel="receiver">';
+        echo '<div class="xlocal-tab-panel" data-tab-panel="receiver" id="xlocal-panel-receiver" role="tabpanel" aria-labelledby="xlocal-tab-receiver">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Receiver</h2>';
         echo '<p>Security and content rules for ingesting posts.</p>';
@@ -264,6 +335,7 @@ class Xlocal_Bridge_Settings {
         self::render_field( 'receiver_secret', 'Shared Secret', 'password', 'HMAC secret. Must match sender.' );
         self::render_field( 'receiver_clock_skew', 'Allowed Clock Skew (seconds)', 'number', 'Default 300 seconds.' );
         self::render_field( 'receiver_nonce_ttl', 'Nonce TTL (seconds)', 'number', 'Default 600 seconds.' );
+        self::render_field( 'receiver_max_payload_kb', 'Max Payload Size (KB)', 'number', 'Reject oversized payloads early.' );
         self::render_field( 'receiver_ip_allowlist', 'IP Allowlist', 'textarea', 'One IP per line.' );
         self::render_field( 'receiver_rate_limit', 'Rate Limit (req/min)', 'number', '0 disables rate limiting.' );
         self::render_field( 'receiver_require_tls', 'Require TLS', 'checkbox', 'Reject non-HTTPS requests.' );
@@ -280,18 +352,20 @@ class Xlocal_Bridge_Settings {
     }
 
     private static function render_sender_tab() {
-        echo '<div class="xlocal-tab-panel" data-tab-panel="sender">';
+        echo '<div class="xlocal-tab-panel" data-tab-panel="sender" id="xlocal-panel-sender" role="tabpanel" aria-labelledby="xlocal-tab-sender">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Sender</h2>';
         echo '<p>Main endpoint, publishing defaults, and CDN output rules.</p>';
         echo '</div>';
         echo '<table class="form-table" role="presentation">';
+        self::render_field( 'sender_auto_send', 'Auto Send on Publish/Update', 'checkbox', 'Automatically push target post type updates.' );
         self::render_field( 'sender_main_base_url', 'Main Site Base URL', 'text', 'Example: https://www.example.com' );
         self::render_field( 'sender_ingest_path', 'Ingest Endpoint Path', 'text', 'Default /wp-json/xlocal/v1/ingest' );
         self::render_field( 'sender_secret', 'Shared Secret', 'password', 'Must match receiver.' );
         self::render_field( 'sender_timeout', 'Request Timeout (seconds)', 'number', 'Default 15 seconds.' );
         self::render_field( 'sender_max_retries', 'Max Retries', 'number', 'Default 3 retries.' );
         self::render_field( 'sender_backoff_base_ms', 'Backoff Base (ms)', 'number', 'Default 500ms.' );
+        self::render_field( 'sender_max_payload_kb', 'Max Payload Size (KB)', 'number', 'Block oversized payloads before HTTP send.' );
         self::render_field( 'sender_target_post_type', 'Target Post Type', 'text', 'post or custom post type.' );
         self::render_field( 'sender_default_status', 'Default Status to Send', 'select_status', 'publish, pending, or draft.' );
         self::render_field( 'sender_include_author', 'Include Author', 'checkbox', 'Send author mapping fields.' );
@@ -306,11 +380,14 @@ class Xlocal_Bridge_Settings {
         self::render_field( 'sender_schedule_interval', 'Schedule', 'select_schedule', 'Batch schedule interval.' );
         self::render_field( 'sender_dry_run', 'Dry Run', 'checkbox', 'Do not actually send.' );
         echo '</table>';
+        $test_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_sender_test' ), 'xlocal_sender_test' );
+        echo '<p><strong>Sender Test:</strong> Sends a signed sample payload to the configured receiver endpoint.</p>';
+        echo '<p><a href="' . esc_url( $test_url ) . '" class="button button-secondary">Send Test Payload</a></p>';
         echo '</div>';
     }
 
     private static function render_advanced_tab() {
-        echo '<div class="xlocal-tab-panel" data-tab-panel="advanced">';
+        echo '<div class="xlocal-tab-panel" data-tab-panel="advanced" id="xlocal-panel-advanced" role="tabpanel" aria-labelledby="xlocal-tab-advanced">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Advanced</h2>';
         echo '<p>Deduplication, sanitization, and logging controls.</p>';
@@ -337,7 +414,7 @@ class Xlocal_Bridge_Settings {
     }
 
     private static function render_logs_tab( $last_push_result ) {
-        echo '<div class="xlocal-tab-panel" data-tab-panel="logs">';
+        echo '<div class="xlocal-tab-panel" data-tab-panel="logs" id="xlocal-panel-logs" role="tabpanel" aria-labelledby="xlocal-tab-logs">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Logs</h2>';
         echo '<p>Recent diagnostics and last sender response.</p>';
@@ -350,9 +427,134 @@ class Xlocal_Bridge_Settings {
         echo '</div>';
     }
 
+    private static function render_documentation_tab() {
+        echo '<div class="xlocal-tab-panel" data-tab-panel="documentation" id="xlocal-panel-documentation" role="tabpanel" aria-labelledby="xlocal-tab-documentation">';
+        echo '<div class="xlocal-section-header">';
+        echo '<h2>Documentation</h2>';
+        echo '<p>Simple guide for teams that want reliable post sync without technical setup complexity.</p>';
+        echo '</div>';
+
+        echo '<div class="xlocal-doc">';
+
+        echo '<section class="xlocal-doc-hero">';
+        echo '<h3>Start Here: 10-Minute Guided Setup</h3>';
+        echo '<p>Follow this exact order once, then your team can publish normally. This tutorial is written for non-technical users.</p>';
+        echo '<div class="xlocal-doc-pill-row">';
+        echo '<button type="button" class="xlocal-doc-pill" data-doc-target="xlocal-doc-tutorial">Step-by-step</button>';
+        echo '<button type="button" class="xlocal-doc-pill" data-doc-target="xlocal-doc-examples">Real examples</button>';
+        echo '<button type="button" class="xlocal-doc-pill" data-doc-target="xlocal-doc-troubleshooting">Troubleshooting included</button>';
+        echo '</div>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section">';
+        echo '<h3>1) What this plugin does (in plain words)</h3>';
+        echo '<p>This plugin sends posts from your Sender website to your Receiver website using a secure connection.</p>';
+        echo '<p>Use it when content is created on one WordPress site but must appear on another site automatically.</p>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section" id="xlocal-doc-tutorial">';
+        echo '<h3>2) Guided tutorial: exact actions</h3>';
+        echo '<ol class="xlocal-doc-list">';
+        echo '<li>Open WordPress Admin on your destination site and set Mode to <strong>Receiver</strong>.</li>';
+        echo '<li>Enable Receiver, keep Require TLS ON, then set Shared Secret (same secret must be used on sender).</li>';
+        echo '<li>Fill Allowed Media Domains with your CDN host. Example: <code>cdn.example.com</code>.</li>';
+        echo '<li>Save changes.</li>';
+        echo '<li>Open WordPress Admin on your source site and set Mode to <strong>Sender</strong>.</li>';
+        echo '<li>Turn ON Auto Send on Publish/Update.</li>';
+        echo '<li>Main Site Base URL: use destination site URL. Example: <code>https://main.example.com</code>.</li>';
+        echo '<li>Ingest Path: keep default unless instructed: <code>/wp-json/xlocal/v1/ingest</code>.</li>';
+        echo '<li>Shared Secret: paste exactly the same secret from receiver.</li>';
+        echo '<li>Save changes, then click <strong>Send Test Payload</strong>. Check Logs tab for response code 200.</li>';
+        echo '</ol>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section" id="xlocal-doc-examples">';
+        echo '<h3>3) Field examples you can copy</h3>';
+        echo '<table class="xlocal-doc-table">';
+        echo '<thead><tr><th>Field</th><th>Example Value</th><th>Where</th></tr></thead>';
+        echo '<tbody>';
+        echo '<tr><td>Main Site Base URL</td><td><code>https://main.example.com</code></td><td>Sender</td></tr>';
+        echo '<tr><td>Ingest Endpoint Path</td><td><code>/wp-json/xlocal/v1/ingest</code></td><td>Sender</td></tr>';
+        echo '<tr><td>Shared Secret</td><td><code>n7A!pQ9m@4Kz#1wL2xD8rT6y</code></td><td>Sender + Receiver</td></tr>';
+        echo '<tr><td>Allowed Media Domains</td><td><code>cdn.example.com</code><br/><code>img.examplecdn.net</code></td><td>Receiver</td></tr>';
+        echo '<tr><td>Target Post Type</td><td><code>post</code></td><td>Sender</td></tr>';
+        echo '<tr><td>Default Status</td><td><code>pending</code></td><td>Sender/Receiver</td></tr>';
+        echo '<tr><td>Rate Limit</td><td><code>60</code></td><td>Receiver</td></tr>';
+        echo '<tr><td>Max Payload Size (KB)</td><td><code>512</code></td><td>Sender/Receiver</td></tr>';
+        echo '</tbody>';
+        echo '</table>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section">';
+        echo '<h3>4) Recommended settings (safe defaults)</h3>';
+        echo '<ul class="xlocal-doc-list">';
+        echo '<li>Keep <strong>Require TLS</strong> enabled.</li>';
+        echo '<li>Keep <strong>Enable HTML Sanitization</strong> enabled.</li>';
+        echo '<li>Keep <strong>Reject Non-Allowed media</strong> enabled and fill Allowed Media Domains.</li>';
+        echo '<li>Use <strong>pending</strong> as default status until your team confirms the flow.</li>';
+        echo '<li>Enable <strong>Auto Send on Publish/Update</strong> only after test payload is successful.</li>';
+        echo '</ul>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section">';
+        echo '<h3>5) How daily use works</h3>';
+        echo '<ol class="xlocal-doc-list">';
+        echo '<li>Editor publishes or updates a post on Sender site.</li>';
+        echo '<li>Plugin creates a secure payload and sends it to Receiver site.</li>';
+        echo '<li>Receiver verifies signature, validates media domain, sanitizes HTML, then creates or updates post.</li>';
+        echo '<li>You can review the latest response in the Logs tab.</li>';
+        echo '</ol>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section" id="xlocal-doc-troubleshooting">';
+        echo '<h3>6) If posts are not arriving</h3>';
+        echo '<ol class="xlocal-doc-list">';
+        echo '<li>Check Sender Mode and Receiver Mode are correct.</li>';
+        echo '<li>Confirm Shared Secret matches exactly on both sites.</li>';
+        echo '<li>Confirm Sender Base URL points to Receiver site (not same site).</li>';
+        echo '<li>Use Send Test Payload and read Logs tab response.</li>';
+        echo '<li>If using Batch mode, ensure WordPress cron is running on server.</li>';
+        echo '<li>If media is blocked, add your CDN domain to Allowed Media Domains on Receiver.</li>';
+        echo '</ol>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section">';
+        echo '<h3>7) Security notes for managers</h3>';
+        echo '<ul class="xlocal-doc-list">';
+        echo '<li>Shared Secret is the main lock. Change it immediately if leaked.</li>';
+        echo '<li>Only trusted admins should access plugin settings.</li>';
+        echo '<li>Use HTTPS on both websites.</li>';
+        echo '<li>Optional: use IP allowlist if your hosting network is stable.</li>';
+        echo '<li>Do not disable sanitization unless your team fully understands HTML security risk.</li>';
+        echo '</ul>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section">';
+        echo '<h3>8) Suggested launch plan</h3>';
+        echo '<ol class="xlocal-doc-list">';
+        echo '<li>Week 1: Use Test Payload only.</li>';
+        echo '<li>Week 2: Enable Auto Send for one post type with status pending.</li>';
+        echo '<li>Week 3: Move to publish status after editorial review passes.</li>';
+        echo '<li>Week 4: Enable Batch or Immediate mode based on your traffic pattern.</li>';
+        echo '</ol>';
+        echo '</section>';
+
+        echo '<section class="xlocal-doc-section">';
+        echo '<h3>FAQ (quick answers)</h3>';
+        echo '<details class="xlocal-doc-faq"><summary>What if I do not know my CDN domain?</summary><p>Ask your hosting/CDN provider and paste only the hostname (without path), for example <code>cdn.example.com</code>.</p></details>';
+        echo '<details class="xlocal-doc-faq"><summary>Can I set publish directly?</summary><p>Yes, but start with <code>pending</code> first, confirm quality, then switch to <code>publish</code>.</p></details>';
+        echo '<details class="xlocal-doc-faq"><summary>Do I need Batch mode?</summary><p>Use Immediate for low volume. Use Batch if you publish many posts and want controlled periodic sending.</p></details>';
+        echo '</section>';
+
+        echo '</div>';
+        echo '</div>';
+    }
+
     private static function render_field( $key, $label, $type, $help = '' ) {
         $options = self::get_options();
         $value = isset( $options[ $key ] ) ? $options[ $key ] : '';
+        $placeholder = self::get_field_placeholder( $key );
+        $placeholder_attr = $placeholder !== '' ? ' placeholder="' . esc_attr( $placeholder ) . '"' : '';
         echo '<tr>'; 
         printf( '<th scope="row">%s</th>', esc_html( $label ) );
         echo '<td>';
@@ -361,13 +563,13 @@ class Xlocal_Bridge_Settings {
                 printf( '<label class="xlocal-toggle"><input type="checkbox" name="%s[%s]" value="1" %s /><span></span></label>', esc_attr( self::OPTION_KEY ), esc_attr( $key ), checked( $value, 1, false ) );
                 break;
             case 'textarea':
-                printf( '<textarea name="%s[%s]" rows="4" cols="50">%s</textarea>', esc_attr( self::OPTION_KEY ), esc_attr( $key ), esc_textarea( $value ) );
+                printf( '<textarea name="%s[%s]" rows="4" cols="50"%s>%s</textarea>', esc_attr( self::OPTION_KEY ), esc_attr( $key ), $placeholder_attr, esc_textarea( $value ) );
                 break;
             case 'number':
-                printf( '<input type="number" name="%s[%s]" value="%s" class="small-text" />', esc_attr( self::OPTION_KEY ), esc_attr( $key ), esc_attr( $value ) );
+                printf( '<input type="number" name="%s[%s]" value="%s" class="small-text"%s />', esc_attr( self::OPTION_KEY ), esc_attr( $key ), esc_attr( $value ), $placeholder_attr );
                 break;
             case 'password':
-                printf( '<input type="password" name="%s[%s]" value="%s" />', esc_attr( self::OPTION_KEY ), esc_attr( $key ), esc_attr( $value ) );
+                printf( '<input type="password" name="%s[%s]" value="%s"%s />', esc_attr( self::OPTION_KEY ), esc_attr( $key ), esc_attr( $value ), $placeholder_attr );
                 break;
             case 'select_status':
                 $statuses = array( 'publish', 'pending', 'draft' );
@@ -450,9 +652,15 @@ class Xlocal_Bridge_Settings {
                 echo '</select>';
                 break;
             default:
-                printf( '<input type="text" name="%s[%s]" value="%s" class="regular-text" />', esc_attr( self::OPTION_KEY ), esc_attr( $key ), esc_attr( $value ) );
+                printf( '<input type="text" name="%s[%s]" value="%s" class="regular-text"%s />', esc_attr( self::OPTION_KEY ), esc_attr( $key ), esc_attr( $value ), $placeholder_attr );
                 break;
         }
+
+        $example = self::get_field_example( $key );
+        if ( $example !== '' ) {
+            printf( '<p class="xlocal-field-hint">%s</p>', esc_html( $example ) );
+        }
+
         if ( $help ) {
             echo '</td>';
             printf( '<td class="xlocal-help-cell"><span class="xlocal-help"><span class="xlocal-help-icon">i</span><span class="xlocal-help-text">%s</span></span></td>', esc_html( $help ) );
@@ -460,6 +668,52 @@ class Xlocal_Bridge_Settings {
             return;
         }
         echo '</td><td class="xlocal-help-cell"></td></tr>';
+    }
+
+    private static function get_field_placeholder( $key ) {
+        $placeholders = array(
+            'receiver_secret' => 'Use same secret as sender',
+            'receiver_clock_skew' => '300',
+            'receiver_nonce_ttl' => '600',
+            'receiver_max_payload_kb' => '512',
+            'receiver_ip_allowlist' => "203.0.113.10\n198.51.100.21",
+            'receiver_rate_limit' => '60',
+            'receiver_default_post_type' => 'post',
+            'receiver_fixed_author_id' => '2',
+            'receiver_allowed_media_domains' => "cdn.example.com\nimg.examplecdn.net",
+            'receiver_source_url_meta_key' => '_xlocal_source_url',
+            'receiver_category_mapping_rules' => "News -> Updates\nSports -> Match Reports",
+            'receiver_custom_allowed' => '{"p":[],"a":{"href":true},"img":{"src":true,"alt":true}}',
+            'receiver_retain_logs_days' => '30',
+            'sender_main_base_url' => 'https://main.example.com',
+            'sender_ingest_path' => '/wp-json/xlocal/v1/ingest',
+            'sender_secret' => 'Use same secret as receiver',
+            'sender_timeout' => '15',
+            'sender_max_retries' => '3',
+            'sender_backoff_base_ms' => '500',
+            'sender_max_payload_kb' => '512',
+            'sender_target_post_type' => 'post',
+            'sender_author_name' => 'editor',
+            'sender_cdn_base' => 'https://cdn.example.com',
+            'sender_batch_size' => '10',
+        );
+        return isset( $placeholders[ $key ] ) ? $placeholders[ $key ] : '';
+    }
+
+    private static function get_field_example( $key ) {
+        $examples = array(
+            'receiver_secret' => 'Example: use 24+ random characters and match it exactly on sender site.',
+            'receiver_allowed_media_domains' => 'Example: one domain per line, without https:// and without /path.',
+            'receiver_ip_allowlist' => 'Example: leave blank to allow all IPs, or add one IP per line for strict mode.',
+            'sender_main_base_url' => 'Example: destination site URL, not this sender site URL.',
+            'sender_ingest_path' => 'Usually keep default unless your receiver endpoint is customized.',
+            'sender_cdn_base' => 'Example: must match your final image host if CDN enforcement is enabled.',
+            'sender_auto_send' => 'Recommended: enable after Send Test Payload succeeds.',
+            'sender_sync_mode' => 'Immediate = real-time. Batch = scheduled queue processing.',
+            'sender_dry_run' => 'Useful for testing configuration without sending data.',
+            'receiver_default_status' => 'Recommended for onboarding: pending, then move to publish after review.',
+        );
+        return isset( $examples[ $key ] ) ? $examples[ $key ] : '';
     }
 
     private static function render_status_badges( $options ) {
@@ -474,6 +728,7 @@ class Xlocal_Bridge_Settings {
         }
 
         if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
+            $badges[] = array( 'label' => $options['sender_auto_send'] ? 'Sender Auto Send Enabled' : 'Sender Auto Send Disabled', 'state' => $options['sender_auto_send'] ? 'ok' : 'warn' );
             $badges[] = array( 'label' => $options['sender_main_base_url'] ? 'Sender Endpoint Set' : 'Sender Endpoint Missing', 'state' => $options['sender_main_base_url'] ? 'ok' : 'warn' );
             $badges[] = array( 'label' => Xlocal_Bridge_Settings::get_sender_secret() ? 'Sender Secret Set' : 'Sender Secret Missing', 'state' => Xlocal_Bridge_Settings::get_sender_secret() ? 'ok' : 'warn' );
             $badges[] = array( 'label' => $options['sender_cdn_base'] ? 'CDN Base Set' : 'CDN Base Missing', 'state' => $options['sender_cdn_base'] ? 'ok' : 'warn' );
@@ -495,7 +750,7 @@ class Xlocal_Bridge_Settings {
         $options = self::get_options();
         $endpoint = rtrim( $options['sender_main_base_url'], '/' ) . $options['sender_ingest_path'];
         $secret = self::get_sender_secret();
-        if ( empty( $endpoint ) || empty( $secret ) ) {
+        if ( ! wp_http_validate_url( $endpoint ) || empty( $secret ) ) {
             self::set_notice( 'Missing main endpoint or secret.', 'error' );
             wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
             exit;

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: xLocal Bridge Post
  * Description: Unified Sender + Receiver bridge for pushing finalized content with CDN-only media URLs.
- * Version: 0.2.0
+ * Version: 0.4.0
  * Author: JagaWarta
  */
 
