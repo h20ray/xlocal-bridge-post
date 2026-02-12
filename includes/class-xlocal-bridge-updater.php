@@ -13,6 +13,7 @@ class Xlocal_Bridge_Updater {
 
     public static function init() {
         add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject_update' ) );
+        add_filter( 'site_transient_update_plugins', array( __CLASS__, 'inject_update' ) );
         add_filter( 'plugins_api', array( __CLASS__, 'plugins_api' ), 20, 3 );
         add_action( 'upgrader_process_complete', array( __CLASS__, 'clear_cache_on_upgrade' ), 10, 2 );
         add_filter( 'upgrader_source_selection', array( __CLASS__, 'normalize_source_folder' ), 10, 4 );
@@ -122,7 +123,15 @@ class Xlocal_Bridge_Updater {
     }
 
     public static function normalize_source_folder( $source, $remote_source, $upgrader, $hook_extra ) {
-        if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== self::plugin_basename() ) {
+        $plugin = self::plugin_basename();
+        $is_target = false;
+        if ( ! empty( $hook_extra['plugin'] ) && $hook_extra['plugin'] === $plugin ) {
+            $is_target = true;
+        }
+        if ( ! $is_target && ! empty( $hook_extra['plugins'] ) && is_array( $hook_extra['plugins'] ) && in_array( $plugin, $hook_extra['plugins'], true ) ) {
+            $is_target = true;
+        }
+        if ( ! $is_target ) {
             return $source;
         }
 
