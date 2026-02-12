@@ -502,11 +502,11 @@ class Xlocal_Bridge_Sender {
             return;
         }
         $prefix = gmdate( 'Y-m-d H:i:s' ) . ' UTC - ';
-        $existing = isset( $options['sender_last_push_result'] ) ? (string) $options['sender_last_push_result'] : '';
+        $existing = isset( $options['sender_debug_log_history'] ) ? (string) $options['sender_debug_log_history'] : '';
         $lines = array_filter( explode( "\n", $existing ) );
         $lines[] = $prefix . sanitize_text_field( $message );
-        $lines = array_slice( $lines, -20 );
-        $options['sender_last_push_result'] = implode( "\n", $lines );
+        $lines = array_slice( $lines, -200 );
+        $options['sender_debug_log_history'] = implode( "\n", $lines );
         update_option( Xlocal_Bridge_Settings::OPTION_KEY, $options );
     }
 }

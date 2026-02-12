@@ -22,8 +22,13 @@
     }
 
     if (tabs.length) {
+        const params = new URLSearchParams(window.location.search);
+        const tabFromUrl = params.get('xlocal_tab');
         const active = root.querySelector('.xlocal-tab.is-active');
-        const initialId = active && active.dataset.tab ? active.dataset.tab : tabs[0].dataset.tab;
+        let initialId = active && active.dataset.tab ? active.dataset.tab : tabs[0].dataset.tab;
+        if (tabFromUrl && [...tabs].some((tab) => tab.dataset.tab === tabFromUrl)) {
+            initialId = tabFromUrl;
+        }
         activateTab(initialId);
         tabs.forEach((tab) => {
             tab.addEventListener('click', (event) => {

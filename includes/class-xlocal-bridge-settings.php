@@ -15,6 +15,7 @@ class Xlocal_Bridge_Settings {
         add_action( 'admin_post_xlocal_bulk_send_run', array( __CLASS__, 'handle_bulk_send' ) );
         add_action( 'admin_post_xlocal_check_updates_now', array( __CLASS__, 'handle_check_updates_now' ) );
         add_action( 'admin_post_xlocal_update_plugin_now', array( __CLASS__, 'handle_update_plugin_now' ) );
+        add_action( 'admin_post_xlocal_clear_sender_debug_logs', array( __CLASS__, 'handle_clear_sender_debug_logs' ) );
         add_action( 'admin_post_update', array( __CLASS__, 'maybe_handle_bulk_send_from_update_route' ) );
         add_action( 'admin_post_xlocal_bulk_import_run', array( __CLASS__, 'handle_bulk_import' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
@@ -81,6 +82,7 @@ class Xlocal_Bridge_Settings {
             'sender_dry_run' => 0,
             'sender_debug_logs' => 0,
             'sender_last_push_result' => '',
+            'sender_debug_log_history' => '',
         );
     }
 
@@ -164,7 +166,7 @@ class Xlocal_Bridge_Settings {
                 continue;
             }
             if ( is_string( $value ) ) {
-                if ( strpos( $key, 'allowlist' ) !== false || strpos( $key, 'mapping_rules' ) !== false || strpos( $key, 'custom_allowed' ) !== false ) {
+                if ( strpos( $key, 'allowlist' ) !== false || strpos( $key, 'mapping_rules' ) !== false || strpos( $key, 'custom_allowed' ) !== false || strpos( $key, 'debug_log_history' ) !== false ) {
                     $output[ $key ] = sanitize_textarea_field( $raw );
                 } else {
                     $output[ $key ] = sanitize_text_field( $raw );
@@ -221,30 +223,36 @@ class Xlocal_Bridge_Settings {
                 'label' => 'Overview',
                 'desc' => 'Choose mode and verify essentials before sending or receiving.',
             ),
-            'receiver' => array(
+        );
+        if ( in_array( $mode, array( 'receiver', 'both' ), true ) ) {
+            $tabs['receiver'] = array(
                 'label' => 'Receiver',
                 'desc' => 'Security, content policy, and media rules for ingest.',
-            ),
-            'sender' => array(
+            );
+        }
+        if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
+            $tabs['sender'] = array(
                 'label' => 'Sender',
                 'desc' => 'Endpoint, publishing, and CDN output rules.',
-            ),
-            'advanced' => array(
-                'label' => 'Advanced',
-                'desc' => 'Sanitization, dedup, and logging controls.',
-            ),
-            'logs' => array(
+            );
+        }
+        $tabs['advanced'] = array(
+            'label' => 'Advanced',
+            'desc' => 'Sanitization, dedup, and logging controls.',
+        );
+        if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
+            $tabs['logs'] = array(
                 'label' => 'Logs',
-                'desc' => 'Diagnostics and last push result.',
-            ),
-            'bulk_send' => array(
+                'desc' => 'Diagnostics and sender update status.',
+            );
+            $tabs['bulk_send'] = array(
                 'label' => 'Bulk Send',
                 'desc' => 'Backfill old posts with deterministic, test-friendly sending.',
-            ),
-            'documentation' => array(
-                'label' => 'Documentation',
-                'desc' => 'Step-by-step guide for non-technical users.',
-            ),
+            );
+        }
+        $tabs['documentation'] = array(
+            'label' => 'Documentation',
+            'desc' => 'Step-by-step guide for non-technical users.',
         );
 
         echo '<div class="wrap xlocal-admin">';
@@ -271,11 +279,17 @@ class Xlocal_Bridge_Settings {
         echo '</div>';
 
         self::render_overview_tab( $mode, $options );
-        self::render_receiver_tab();
-        self::render_sender_tab();
-        self::render_advanced_tab();
-        self::render_logs_tab( $options['sender_last_push_result'] );
-        self::render_bulk_send_tab( $options );
+        if ( in_array( $mode, array( 'receiver', 'both' ), true ) ) {
+            self::render_receiver_tab();
+        }
+        if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
+            self::render_sender_tab();
+        }
+        self::render_advanced_tab( $mode );
+        if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
+            self::render_logs_tab( $options['sender_last_push_result'], isset( $options['sender_debug_log_history'] ) ? $options['sender_debug_log_history'] : '' );
+            self::render_bulk_send_tab( $options );
+        }
         self::render_documentation_tab();
 
         submit_button();
@@ -398,34 +412,38 @@ class Xlocal_Bridge_Settings {
         echo '</div>';
     }
 
-    private static function render_advanced_tab() {
+    private static function render_advanced_tab( $mode ) {
         echo '<div class="xlocal-tab-panel" data-tab-panel="advanced" id="xlocal-panel-advanced" role="tabpanel" aria-labelledby="xlocal-tab-advanced">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Advanced</h2>';
         echo '<p>Deduplication, sanitization, and logging controls.</p>';
         echo '</div>';
         echo '<table class="form-table" role="presentation">';
-        self::render_field( 'receiver_dedup_mode', 'Dedup Mode', 'select_dedup', 'source_url or source_hash+source_url.' );
-        self::render_field( 'receiver_source_url_meta_key', 'Source URL Meta Key', 'text', 'Default _xlocal_source_url' );
-        self::render_field( 'receiver_update_strategy', 'Update Strategy', 'select_update_strategy', 'Overwrite or preserve manual edits.' );
-        self::render_field( 'receiver_auto_create_categories', 'Auto Create Categories', 'checkbox', 'Create missing categories.' );
-        self::render_field( 'receiver_auto_create_tags', 'Auto Create Tags', 'checkbox', 'Create missing tags.' );
-        self::render_field( 'receiver_category_mapping_rules', 'Category Mapping Rules', 'textarea', 'Example: source -> main' );
-        self::render_field( 'receiver_tag_normalization', 'Tag Normalization', 'checkbox', 'Lowercase and trim.' );
-        self::render_field( 'receiver_sanitize_html', 'Enable HTML Sanitization', 'checkbox', 'Run wp_kses on content.' );
-        self::render_field( 'receiver_allowed_profile', 'Allowed Tags Profile', 'select_allowed_profile', 'Strict, standard, or custom.' );
-        self::render_field( 'receiver_custom_allowed', 'Custom Allowed Tags (JSON)', 'textarea', 'Only used when profile is custom.' );
-        self::render_field( 'receiver_strip_inline_styles', 'Strip Inline Styles', 'checkbox', 'Remove style attributes.' );
-        self::render_field( 'receiver_strip_scripts_iframes', 'Strip Scripts/Iframes', 'checkbox', 'Remove script/iframe tags.' );
-        self::render_field( 'receiver_enable_log', 'Enable Ingest Log', 'checkbox', 'Enable ingest log storage.' );
-        self::render_field( 'receiver_log_storage', 'Log Storage', 'select_log_storage', 'DB table or postmeta.' );
-        self::render_field( 'receiver_retain_logs_days', 'Retain Logs (days)', 'number', 'Default 30 days.' );
-        self::render_field( 'sender_debug_logs', 'Sender Debug Logs', 'checkbox', 'Store detailed sender logs.' );
+        if ( in_array( $mode, array( 'receiver', 'both' ), true ) ) {
+            self::render_field( 'receiver_dedup_mode', 'Dedup Mode', 'select_dedup', 'source_url or source_hash+source_url.' );
+            self::render_field( 'receiver_source_url_meta_key', 'Source URL Meta Key', 'text', 'Default _xlocal_source_url' );
+            self::render_field( 'receiver_update_strategy', 'Update Strategy', 'select_update_strategy', 'Overwrite or preserve manual edits.' );
+            self::render_field( 'receiver_auto_create_categories', 'Auto Create Categories', 'checkbox', 'Create missing categories.' );
+            self::render_field( 'receiver_auto_create_tags', 'Auto Create Tags', 'checkbox', 'Create missing tags.' );
+            self::render_field( 'receiver_category_mapping_rules', 'Category Mapping Rules', 'textarea', 'Example: source -> main' );
+            self::render_field( 'receiver_tag_normalization', 'Tag Normalization', 'checkbox', 'Lowercase and trim.' );
+            self::render_field( 'receiver_sanitize_html', 'Enable HTML Sanitization', 'checkbox', 'Run wp_kses on content.' );
+            self::render_field( 'receiver_allowed_profile', 'Allowed Tags Profile', 'select_allowed_profile', 'Strict, standard, or custom.' );
+            self::render_field( 'receiver_custom_allowed', 'Custom Allowed Tags (JSON)', 'textarea', 'Only used when profile is custom.' );
+            self::render_field( 'receiver_strip_inline_styles', 'Strip Inline Styles', 'checkbox', 'Remove style attributes.' );
+            self::render_field( 'receiver_strip_scripts_iframes', 'Strip Scripts/Iframes', 'checkbox', 'Remove script/iframe tags.' );
+            self::render_field( 'receiver_enable_log', 'Enable Ingest Log', 'checkbox', 'Enable ingest log storage.' );
+            self::render_field( 'receiver_log_storage', 'Log Storage', 'select_log_storage', 'DB table or postmeta.' );
+            self::render_field( 'receiver_retain_logs_days', 'Retain Logs (days)', 'number', 'Default 30 days.' );
+        }
+        if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
+            self::render_field( 'sender_debug_logs', 'Sender Debug Logs', 'checkbox', 'Store detailed sender logs.' );
+        }
         echo '</table>';
         echo '</div>';
     }
 
-    private static function render_logs_tab( $last_push_result ) {
+    private static function render_logs_tab( $last_push_result, $sender_debug_log_history ) {
         echo '<div class="xlocal-tab-panel" data-tab-panel="logs" id="xlocal-panel-logs" role="tabpanel" aria-labelledby="xlocal-tab-logs">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Logs</h2>';
@@ -435,11 +453,14 @@ class Xlocal_Bridge_Settings {
         echo '<tr><th scope="row">Last Push Result</th><td>';
         printf( '<textarea readonly rows="6">%s</textarea>', esc_textarea( $last_push_result ) );
         echo '</td></tr>';
+        echo '<tr><th scope="row">Sender Debug Log</th><td>';
+        printf( '<textarea readonly rows="12">%s</textarea>', esc_textarea( $sender_debug_log_history ) );
+        $clear_debug_logs_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_clear_sender_debug_logs' ), 'xlocal_clear_sender_debug_logs' );
+        echo '<p><a href="' . esc_url( $clear_debug_logs_url ) . '" class="button button-secondary">Clear Sender Debug Log</a></p>';
+        echo '<p class="xlocal-field-hint">Enable "Sender Debug Logs" in Advanced tab to collect timestamped sender transport/debug entries.</p>';
+        echo '</td></tr>';
         if ( class_exists( 'Xlocal_Bridge_Updater' ) ) {
             $snapshot = Xlocal_Bridge_Updater::status_snapshot();
-            $repo = ! empty( $snapshot['repo'] ) ? $snapshot['repo'] : 'not configured';
-            $channel = ! empty( $snapshot['channel'] ) ? $snapshot['channel'] : 'unknown';
-            $branch = ! empty( $snapshot['branch'] ) ? $snapshot['branch'] : 'unknown';
             $cached_version = ! empty( $snapshot['cached_version'] ) ? $snapshot['cached_version'] : '-';
             $cached_commit = ! empty( $snapshot['cached_commit'] ) ? substr( $snapshot['cached_commit'], 0, 12 ) : '-';
             $installed_commit = ! empty( $snapshot['installed_commit'] ) ? substr( $snapshot['installed_commit'], 0, 12 ) : '-';
@@ -448,8 +469,6 @@ class Xlocal_Bridge_Settings {
             $action_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_check_updates_now' ), 'xlocal_check_updates_now' );
 
             echo '<tr><th scope="row">Updater Status</th><td>';
-            echo '<p>Source: <code>' . esc_html( $repo ) . '</code></p>';
-            echo '<p>Channel: <code>' . esc_html( $channel ) . '</code>, Branch: <code>' . esc_html( $branch ) . '</code></p>';
             echo '<p>Installed Commit: <code>' . esc_html( $installed_commit ) . '</code></p>';
             echo '<p>Latest Cached Commit: <code>' . esc_html( $cached_commit ) . '</code>, Version: <code>' . esc_html( $cached_version ) . '</code></p>';
             if ( $update_available ) {
@@ -1134,30 +1153,23 @@ class Xlocal_Bridge_Settings {
 
         if ( ! class_exists( 'Xlocal_Bridge_Updater' ) ) {
             self::set_notice( 'Updater class is not loaded.', 'error' );
-            wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
+            wp_safe_redirect( add_query_arg( 'xlocal_tab', 'logs', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
             exit;
         }
 
         $snapshot = Xlocal_Bridge_Updater::force_refresh();
-        $channel = isset( $snapshot['channel'] ) ? $snapshot['channel'] : 'unknown';
-        $branch = isset( $snapshot['branch'] ) ? $snapshot['branch'] : 'unknown';
-        $repo = isset( $snapshot['repo'] ) ? $snapshot['repo'] : '';
         $cached_commit = ! empty( $snapshot['cached_commit'] ) ? substr( $snapshot['cached_commit'], 0, 12 ) : '-';
         $cached_version = ! empty( $snapshot['cached_version'] ) ? $snapshot['cached_version'] : '-';
-        $repo_label = $repo !== '' ? $repo : 'not configured';
 
         self::set_notice(
             sprintf(
-                'Update refresh complete. Repo: %s, Channel: %s, Branch: %s, Latest commit: %s, Version: %s. Check Plugins page for available update.',
-                $repo_label,
-                $channel,
-                $branch,
+                'Update refresh complete. Latest commit: %s, Version: %s. Check Plugins page for available update.',
                 $cached_commit,
                 $cached_version
             ),
             'success'
         );
-        wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
+        wp_safe_redirect( add_query_arg( 'xlocal_tab', 'logs', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
         exit;
     }
 
@@ -1186,6 +1198,21 @@ class Xlocal_Bridge_Settings {
             'upgrade-plugin_' . $plugin_file
         );
         wp_safe_redirect( $upgrade_url );
+        exit;
+    }
+
+    public static function handle_clear_sender_debug_logs() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+        check_admin_referer( 'xlocal_clear_sender_debug_logs' );
+
+        $options = self::get_options();
+        $options['sender_debug_log_history'] = '';
+        update_option( self::OPTION_KEY, $options );
+
+        self::set_notice( 'Sender debug log cleared.', 'success' );
+        wp_safe_redirect( add_query_arg( 'xlocal_tab', 'logs', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
         exit;
     }
 
