@@ -4,7 +4,7 @@ xLocal Bridge Post is a WordPress plugin for **syncing posts from one WordPress 
 
 ### Typical problem this solves
 
-Bayangkan kamu punya satu WordPress yang menjalankan **AI rewrite dari RSS**:
+Kamu punya satu WordPress yang menjalankan **AI rewrite dari RSS dan Sumber Lainya**:
 
 - Worker AI ini terus-menerus menarik RSS, rewriting artikel, memproses gambar, dan publish.
 - Semua proses berat (AI, HTTP requests, image, dsb.) terjadi di **situs utama** yang juga dipakai pengunjung.

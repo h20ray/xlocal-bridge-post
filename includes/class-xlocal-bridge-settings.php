@@ -463,11 +463,9 @@ class Xlocal_Bridge_Settings {
             $bulk_batch_size = 25;
         }
 
-        $action_url = admin_url( 'admin-post.php?action=xlocal_bulk_import_run' );
-
         echo '<p class="xlocal-note"><strong>Note:</strong> Bulk Import will not create duplicate posts on the main site. It respects existing dedup and update rules on the receiver.</p>';
 
-        echo '<form method="post" action="' . esc_url( $action_url ) . '">';
+        // Nonce stays inside main options form so Bulk Import can post to admin-post safely.
         wp_nonce_field( 'xlocal_bulk_import', 'xlocal_bulk_import_nonce' );
         echo '<table class="form-table" role="presentation">';
 
@@ -539,9 +537,18 @@ class Xlocal_Bridge_Settings {
 
         echo '</table>';
 
-        submit_button( 'Run Bulk Import', 'secondary' );
+        // Use the main settings form but override action when running Bulk Import.
+        $action_url = admin_url( 'admin-post.php?action=xlocal_bulk_import_run' );
+        submit_button(
+            'Run Bulk Import',
+            'secondary',
+            'xlocal_bulk_import_run',
+            false,
+            array(
+                'formaction' => esc_url( $action_url ),
+            )
+        );
 
-        echo '</form>';
         echo '</div>';
     }
 
