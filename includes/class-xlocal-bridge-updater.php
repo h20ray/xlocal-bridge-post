@@ -132,6 +132,35 @@ class Xlocal_Bridge_Updater {
         return self::channel() === 'commit' ? 'Commit' : 'Release';
     }
 
+    public static function status_snapshot() {
+        $cached = get_site_transient( self::cache_key() );
+        if ( ! is_array( $cached ) ) {
+            $cached = array();
+        }
+        return array(
+            'configured'       => self::is_repo_configured(),
+            'repo'             => self::repo(),
+            'channel'          => self::channel(),
+            'branch'           => self::branch(),
+            'installed_commit' => (string) get_option( self::INSTALLED_COMMIT_OPTION, '' ),
+            'cached_version'   => isset( $cached['version'] ) ? (string) $cached['version'] : '',
+            'cached_commit'    => isset( $cached['commit'] ) ? (string) $cached['commit'] : '',
+            'cached_at'        => isset( $cached['published_at'] ) ? (string) $cached['published_at'] : '',
+        );
+    }
+
+    public static function force_refresh() {
+        delete_site_transient( self::cache_key() );
+        delete_site_transient( 'update_plugins' );
+        if ( function_exists( 'wp_clean_plugins_cache' ) ) {
+            wp_clean_plugins_cache( true );
+        }
+        if ( function_exists( 'wp_update_plugins' ) ) {
+            wp_update_plugins();
+        }
+        return self::status_snapshot();
+    }
+
     private static function is_update_available( $payload ) {
         if ( self::channel() === 'commit' ) {
             $latest_commit = isset( $payload['commit'] ) ? (string) $payload['commit'] : '';

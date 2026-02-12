@@ -13,6 +13,7 @@ class Xlocal_Bridge_Settings {
         add_action( 'admin_enqueue_scripts', array( __CLASS__, 'enqueue_admin_assets' ) );
         add_action( 'admin_post_xlocal_sender_test', array( __CLASS__, 'handle_test_payload' ) );
         add_action( 'admin_post_xlocal_bulk_send_run', array( __CLASS__, 'handle_bulk_send' ) );
+        add_action( 'admin_post_xlocal_check_updates_now', array( __CLASS__, 'handle_check_updates_now' ) );
         add_action( 'admin_post_update', array( __CLASS__, 'maybe_handle_bulk_send_from_update_route' ) );
         add_action( 'admin_post_xlocal_bulk_import_run', array( __CLASS__, 'handle_bulk_import' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
@@ -433,6 +434,25 @@ class Xlocal_Bridge_Settings {
         echo '<tr><th scope="row">Last Push Result</th><td>';
         printf( '<textarea readonly rows="6">%s</textarea>', esc_textarea( $last_push_result ) );
         echo '</td></tr>';
+        if ( class_exists( 'Xlocal_Bridge_Updater' ) ) {
+            $snapshot = Xlocal_Bridge_Updater::status_snapshot();
+            $repo = ! empty( $snapshot['repo'] ) ? $snapshot['repo'] : 'not configured';
+            $channel = ! empty( $snapshot['channel'] ) ? $snapshot['channel'] : 'unknown';
+            $branch = ! empty( $snapshot['branch'] ) ? $snapshot['branch'] : 'unknown';
+            $cached_version = ! empty( $snapshot['cached_version'] ) ? $snapshot['cached_version'] : '-';
+            $cached_commit = ! empty( $snapshot['cached_commit'] ) ? substr( $snapshot['cached_commit'], 0, 12 ) : '-';
+            $installed_commit = ! empty( $snapshot['installed_commit'] ) ? substr( $snapshot['installed_commit'], 0, 12 ) : '-';
+            $action_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_check_updates_now' ), 'xlocal_check_updates_now' );
+
+            echo '<tr><th scope="row">Updater Status</th><td>';
+            echo '<p>Source: <code>' . esc_html( $repo ) . '</code></p>';
+            echo '<p>Channel: <code>' . esc_html( $channel ) . '</code>, Branch: <code>' . esc_html( $branch ) . '</code></p>';
+            echo '<p>Installed Commit: <code>' . esc_html( $installed_commit ) . '</code></p>';
+            echo '<p>Latest Cached Commit: <code>' . esc_html( $cached_commit ) . '</code>, Version: <code>' . esc_html( $cached_version ) . '</code></p>';
+            echo '<p><a href="' . esc_url( $action_url ) . '" class="button button-secondary">Check Latest Updates Now</a></p>';
+            echo '<p class="xlocal-field-hint">Forces GitHub + WordPress update refresh and returns to this page with status notice.</p>';
+            echo '</td></tr>';
+        }
         echo '</table>';
         echo '</div>';
     }
@@ -1093,6 +1113,41 @@ class Xlocal_Bridge_Settings {
             return;
         }
         self::handle_bulk_send();
+    }
+
+    public static function handle_check_updates_now() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+        check_admin_referer( 'xlocal_check_updates_now' );
+
+        if ( ! class_exists( 'Xlocal_Bridge_Updater' ) ) {
+            self::set_notice( 'Updater class is not loaded.', 'error' );
+            wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
+            exit;
+        }
+
+        $snapshot = Xlocal_Bridge_Updater::force_refresh();
+        $channel = isset( $snapshot['channel'] ) ? $snapshot['channel'] : 'unknown';
+        $branch = isset( $snapshot['branch'] ) ? $snapshot['branch'] : 'unknown';
+        $repo = isset( $snapshot['repo'] ) ? $snapshot['repo'] : '';
+        $cached_commit = ! empty( $snapshot['cached_commit'] ) ? substr( $snapshot['cached_commit'], 0, 12 ) : '-';
+        $cached_version = ! empty( $snapshot['cached_version'] ) ? $snapshot['cached_version'] : '-';
+        $repo_label = $repo !== '' ? $repo : 'not configured';
+
+        self::set_notice(
+            sprintf(
+                'Update refresh complete. Repo: %s, Channel: %s, Branch: %s, Latest commit: %s, Version: %s. Check Plugins page for available update.',
+                $repo_label,
+                $channel,
+                $branch,
+                $cached_commit,
+                $cached_version
+            ),
+            'success'
+        );
+        wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
+        exit;
     }
 
     private static function set_notice( $message, $type ) {
