@@ -205,8 +205,8 @@ trait Xlocal_Bridge_Settings_Store_Trait {
         if ( $hook !== 'settings_page_xlocal-bridge-post' ) {
             return;
         }
-        $base_url = plugin_dir_url( __FILE__ );
-        $base_url = str_replace( '/includes', '', $base_url );
+        $base_file = defined( 'XLOCAL_BRIDGE_POST_FILE' ) ? XLOCAL_BRIDGE_POST_FILE : dirname( __DIR__, 3 ) . '/xlocal-bridge-post.php';
+        $base_url = plugin_dir_url( $base_file );
         $asset_version = defined( 'XLOCAL_BRIDGE_POST_VERSION' ) ? XLOCAL_BRIDGE_POST_VERSION : '0.5.2';
         wp_enqueue_style( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.css', array(), $asset_version );
         wp_enqueue_script( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.js', array(), $asset_version, true );
