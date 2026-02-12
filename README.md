@@ -301,8 +301,8 @@ Kalau kamu update konten lama di Sender:
 
 ## 11. Versioning
 
-- Current plugin version: `0.5.1`
-- Admin assets (`admin.css`, `admin.js`) juga memakai `0.5.1` untuk cache-busting.
+- Current plugin version: `0.5.2`
+- Admin assets (`admin.css`, `admin.js`) juga memakai `0.5.2` untuk cache-busting.
 - Release notes tersedia di `CHANGELOG.md`.
 
 ---

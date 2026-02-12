@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.5.2 - 2026-02-12
+
+### Added
+- Dedicated `Xlocal_Bridge_Admin_Action_Service` class for all admin-post handlers and admin notices.
+- Backward-compatible wrapper methods on `Xlocal_Bridge_Settings` for legacy callback safety.
+- Receiver-side content-aware diagnostics tab and ingest logging pipeline.
+
+### Changed
+- Refactored plugin structure into loader + Admin/Core folders with compatibility shims retained.
+- Split admin settings monolith into focused store/page/action concerns and smaller page/action modules.
+- Receiver ingest now supports optional prepend of featured image when incoming content has no `<img>`.
+- Receiver taxonomy normalization now decodes HTML entities before sanitization (for cleaner terms).
+- Version bumped to `0.5.2`.
+- Admin asset cache-busting version bumped to `0.5.2`.
+
 ## 0.5.1 - 2026-02-12
 
 ### Added
