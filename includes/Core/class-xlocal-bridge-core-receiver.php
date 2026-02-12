@@ -143,6 +143,7 @@ class Xlocal_Bridge_Receiver {
                     'tag_taxonomy_error' => isset( $post_id['tag_taxonomy_error'] ) ? sanitize_text_field( (string) $post_id['tag_taxonomy_error'] ) : '',
                     'payload_categories' => isset( $post_id['payload_categories'] ) && is_array( $post_id['payload_categories'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['payload_categories'] ) ) : array(),
                     'normalized_categories' => isset( $post_id['normalized_categories'] ) && is_array( $post_id['normalized_categories'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['normalized_categories'] ) ) : array(),
+                    'category_term_ids' => isset( $post_id['category_term_ids'] ) && is_array( $post_id['category_term_ids'] ) ? array_values( array_map( 'intval', $post_id['category_term_ids'] ) ) : array(),
                     'payload_tags' => isset( $post_id['payload_tags'] ) && is_array( $post_id['payload_tags'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['payload_tags'] ) ) : array(),
                     'normalized_tags' => isset( $post_id['normalized_tags'] ) && is_array( $post_id['normalized_tags'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['normalized_tags'] ) ) : array(),
                 )
@@ -431,6 +432,7 @@ class Xlocal_Bridge_Receiver {
             'tag_taxonomy_error' => isset( $taxonomy_result['tag_taxonomy_error'] ) ? sanitize_text_field( (string) $taxonomy_result['tag_taxonomy_error'] ) : '',
             'payload_categories' => isset( $taxonomy_result['payload_categories'] ) && is_array( $taxonomy_result['payload_categories'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['payload_categories'] ) ) : array(),
             'normalized_categories' => isset( $taxonomy_result['normalized_categories'] ) && is_array( $taxonomy_result['normalized_categories'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['normalized_categories'] ) ) : array(),
+            'category_term_ids' => isset( $taxonomy_result['category_term_ids'] ) && is_array( $taxonomy_result['category_term_ids'] ) ? array_values( array_map( 'intval', $taxonomy_result['category_term_ids'] ) ) : array(),
             'payload_tags' => isset( $taxonomy_result['payload_tags'] ) && is_array( $taxonomy_result['payload_tags'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['payload_tags'] ) ) : array(),
             'normalized_tags' => isset( $taxonomy_result['normalized_tags'] ) && is_array( $taxonomy_result['normalized_tags'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['normalized_tags'] ) ) : array(),
         );
@@ -525,6 +527,7 @@ class Xlocal_Bridge_Receiver {
             'tag_taxonomy_error' => '',
             'payload_categories' => array(),
             'normalized_categories' => array(),
+            'category_term_ids' => array(),
             'payload_tags' => array(),
             'normalized_tags' => array(),
         );
@@ -539,10 +542,9 @@ class Xlocal_Bridge_Receiver {
             if ( ! $result['category_taxonomy_supported'] ) {
                 $result['category_taxonomy_error'] = 'Taxonomy "category" is not registered for post type "' . sanitize_key( (string) $post_type ) . '".';
             } else {
-                if ( $options['receiver_auto_create_categories'] ) {
-                    self::ensure_terms_exist( $cats, 'category' );
-                }
-                $set_cats = wp_set_post_terms( $post_id, $cats, 'category', false );
+                $cat_term_ids = self::resolve_term_ids( $cats, 'category', ! empty( $options['receiver_auto_create_categories'] ) );
+                $result['category_term_ids'] = $cat_term_ids;
+                $set_cats = wp_set_post_terms( $post_id, $cat_term_ids, 'category', false );
                 if ( is_wp_error( $set_cats ) ) {
                     $result['category_taxonomy_error'] = $set_cats->get_error_message();
                 } elseif ( is_array( $set_cats ) ) {
@@ -572,6 +574,32 @@ class Xlocal_Bridge_Receiver {
         }
 
         return $result;
+    }
+
+    private static function resolve_term_ids( $terms, $taxonomy, $allow_create ) {
+        $ids = array();
+        foreach ( (array) $terms as $term_name ) {
+            $term_name = sanitize_text_field( (string) $term_name );
+            if ( $term_name === '' ) {
+                continue;
+            }
+
+            $term = term_exists( $term_name, $taxonomy );
+            if ( ! $term && $allow_create ) {
+                $created = wp_insert_term( $term_name, $taxonomy );
+                if ( ! is_wp_error( $created ) && ! empty( $created['term_id'] ) ) {
+                    $ids[] = intval( $created['term_id'] );
+                }
+                continue;
+            }
+
+            if ( is_array( $term ) && ! empty( $term['term_id'] ) ) {
+                $ids[] = intval( $term['term_id'] );
+            } elseif ( is_int( $term ) && $term > 0 ) {
+                $ids[] = intval( $term );
+            }
+        }
+        return array_values( array_unique( array_filter( $ids ) ) );
     }
 
     private static function normalize_terms( $terms, $mapping_rules, $normalize ) {
