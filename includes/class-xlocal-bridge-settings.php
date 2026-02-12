@@ -240,11 +240,11 @@ class Xlocal_Bridge_Settings {
             'label' => 'Advanced',
             'desc' => 'Sanitization, dedup, and logging controls.',
         );
+        $tabs['logs'] = array(
+            'label' => 'Logs',
+            'desc' => 'Diagnostics and update status.',
+        );
         if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
-            $tabs['logs'] = array(
-                'label' => 'Logs',
-                'desc' => 'Diagnostics and sender update status.',
-            );
             $tabs['bulk_send'] = array(
                 'label' => 'Bulk Send',
                 'desc' => 'Backfill old posts with deterministic, test-friendly sending.',
@@ -286,8 +286,8 @@ class Xlocal_Bridge_Settings {
             self::render_sender_tab();
         }
         self::render_advanced_tab( $mode );
+        self::render_logs_tab( $options['sender_last_push_result'], isset( $options['sender_debug_log_history'] ) ? $options['sender_debug_log_history'] : '', $mode );
         if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
-            self::render_logs_tab( $options['sender_last_push_result'], isset( $options['sender_debug_log_history'] ) ? $options['sender_debug_log_history'] : '' );
             self::render_bulk_send_tab( $options );
         }
         self::render_documentation_tab();
@@ -304,9 +304,19 @@ class Xlocal_Bridge_Settings {
         echo '<h2>Quick Checklist</h2>';
         echo '<ul>';
         echo '<li>Mode set correctly for this site.</li>';
-        echo '<li>Secrets match between sender and receiver.</li>';
-        echo '<li>CDN domain allowlisted on receiver.</li>';
-        echo '<li>Test payload succeeds.</li>';
+        if ( $mode === 'sender' ) {
+            echo '<li>Sender endpoint points to receiver site.</li>';
+            echo '<li>Sender secret matches receiver secret.</li>';
+            echo '<li>Send Test Payload succeeds before enabling Auto Send.</li>';
+        } elseif ( $mode === 'receiver' ) {
+            echo '<li>Receiver is enabled and secret is configured.</li>';
+            echo '<li>Allowed media domains are set correctly.</li>';
+            echo '<li>TLS requirement and rate limit are configured for your environment.</li>';
+        } else {
+            echo '<li>Secrets match between sender and receiver.</li>';
+            echo '<li>CDN domain allowlisted on receiver.</li>';
+            echo '<li>Test payload succeeds.</li>';
+        }
         echo '</ul>';
         echo '<div class="xlocal-note"><strong>Tip:</strong> Use <code>wp-config.php</code> to lock the shared secret.</div>';
         echo '</section>';
@@ -443,44 +453,51 @@ class Xlocal_Bridge_Settings {
         echo '</div>';
     }
 
-    private static function render_logs_tab( $last_push_result, $sender_debug_log_history ) {
+    private static function render_logs_tab( $last_push_result, $sender_debug_log_history, $mode ) {
         echo '<div class="xlocal-tab-panel" data-tab-panel="logs" id="xlocal-panel-logs" role="tabpanel" aria-labelledby="xlocal-tab-logs">';
         echo '<div class="xlocal-section-header">';
         echo '<h2>Logs</h2>';
-        echo '<p>Recent diagnostics and last sender response.</p>';
+        echo '<p>Recent diagnostics and update status.</p>';
         echo '</div>';
         echo '<table class="form-table" role="presentation">';
-        echo '<tr><th scope="row">Last Push Result</th><td>';
-        printf( '<textarea readonly rows="6">%s</textarea>', esc_textarea( $last_push_result ) );
-        echo '</td></tr>';
-        echo '<tr><th scope="row">Sender Debug Log</th><td>';
-        $lines = array_filter( explode( "\n", (string) $sender_debug_log_history ) );
-        if ( empty( $lines ) ) {
-            echo '<p>No sender debug entries yet.</p>';
-        } else {
-            $lines = array_reverse( $lines );
-            echo '<table class="widefat striped" style="max-height:24rem;overflow:auto;display:block;">';
-            echo '<thead><tr><th style="width:14rem;">Timestamp</th><th>Message</th></tr></thead><tbody>';
-            foreach ( $lines as $line ) {
-                $line = (string) $line;
-                $timestamp = '';
-                $message = $line;
-                $parts = explode( ' UTC - ', $line, 2 );
-                if ( count( $parts ) === 2 ) {
-                    $timestamp = $parts[0] . ' UTC';
-                    $message = $parts[1];
+        if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
+            echo '<tr><th scope="row">Last Push Result</th><td>';
+            printf( '<textarea readonly rows="6">%s</textarea>', esc_textarea( $last_push_result ) );
+            echo '</td></tr>';
+            echo '<tr><th scope="row">Sender Debug Log</th><td>';
+            $lines = array_filter( explode( "\n", (string) $sender_debug_log_history ) );
+            if ( empty( $lines ) ) {
+                echo '<p>No sender debug entries yet.</p>';
+            } else {
+                $lines = array_reverse( $lines );
+                echo '<table class="widefat striped" style="max-height:24rem;overflow:auto;display:block;">';
+                echo '<thead><tr><th style="width:14rem;">Timestamp</th><th>Message</th></tr></thead><tbody>';
+                foreach ( $lines as $line ) {
+                    $line = (string) $line;
+                    $timestamp = '';
+                    $message = $line;
+                    $parts = explode( ' UTC - ', $line, 2 );
+                    if ( count( $parts ) === 2 ) {
+                        $timestamp = $parts[0] . ' UTC';
+                        $message = $parts[1];
+                    }
+                    echo '<tr>';
+                    echo '<td><code>' . esc_html( $timestamp ) . '</code></td>';
+                    echo '<td>' . esc_html( $message ) . '</td>';
+                    echo '</tr>';
                 }
-                echo '<tr>';
-                echo '<td><code>' . esc_html( $timestamp ) . '</code></td>';
-                echo '<td>' . esc_html( $message ) . '</td>';
-                echo '</tr>';
+                echo '</tbody></table>';
             }
-            echo '</tbody></table>';
+            $clear_debug_logs_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_clear_sender_debug_logs' ), 'xlocal_clear_sender_debug_logs' );
+            echo '<p><a href="' . esc_url( $clear_debug_logs_url ) . '" class="button button-secondary">Clear Sender Debug Log</a></p>';
+            echo '<p class="xlocal-field-hint">Enable "Sender Debug Logs" in Advanced tab to collect timestamped sender transport/debug entries.</p>';
+            echo '</td></tr>';
+        } else {
+            echo '<tr><th scope="row">Receiver Diagnostics</th><td>';
+            echo '<p>Receiver mode is active. Sender logs are hidden by design.</p>';
+            echo '<p class="xlocal-field-hint">Use this tab for general diagnostics and plugin update checks.</p>';
+            echo '</td></tr>';
         }
-        $clear_debug_logs_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_clear_sender_debug_logs' ), 'xlocal_clear_sender_debug_logs' );
-        echo '<p><a href="' . esc_url( $clear_debug_logs_url ) . '" class="button button-secondary">Clear Sender Debug Log</a></p>';
-        echo '<p class="xlocal-field-hint">Enable "Sender Debug Logs" in Advanced tab to collect timestamped sender transport/debug entries.</p>';
-        echo '</td></tr>';
         if ( class_exists( 'Xlocal_Bridge_Updater' ) ) {
             $snapshot = Xlocal_Bridge_Updater::status_snapshot();
             $cached_version = ! empty( $snapshot['cached_version'] ) ? $snapshot['cached_version'] : '-';
