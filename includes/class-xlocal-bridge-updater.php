@@ -86,16 +86,34 @@ class Xlocal_Bridge_Updater {
         if ( empty( $options['action'] ) || empty( $options['type'] ) || $options['action'] !== 'update' || $options['type'] !== 'plugin' ) {
             return;
         }
-        if ( empty( $options['plugins'] ) || ! is_array( $options['plugins'] ) ) {
+        $plugin = self::plugin_basename();
+        $updated = false;
+
+        if ( ! empty( $options['plugins'] ) && is_array( $options['plugins'] ) && in_array( $plugin, $options['plugins'], true ) ) {
+            $updated = true;
+        }
+        if ( ! $updated && ! empty( $options['plugin'] ) && is_string( $options['plugin'] ) && $options['plugin'] === $plugin ) {
+            $updated = true;
+        }
+        if ( ! $updated ) {
             return;
         }
-        if ( in_array( self::plugin_basename(), $options['plugins'], true ) ) {
+
+        if ( self::channel() === 'commit' ) {
             $cached = get_site_transient( self::cache_key() );
-            if ( self::channel() === 'commit' && is_array( $cached ) && ! empty( $cached['commit'] ) ) {
-                update_option( self::INSTALLED_COMMIT_OPTION, sanitize_text_field( $cached['commit'] ), false );
+            $commit = ( is_array( $cached ) && ! empty( $cached['commit'] ) ) ? (string) $cached['commit'] : '';
+            if ( $commit === '' ) {
+                $fresh = self::get_latest_payload();
+                if ( is_array( $fresh ) && ! empty( $fresh['commit'] ) ) {
+                    $commit = (string) $fresh['commit'];
+                }
             }
-            delete_site_transient( self::cache_key() );
+            if ( $commit !== '' ) {
+                update_option( self::INSTALLED_COMMIT_OPTION, sanitize_text_field( $commit ), false );
+            }
         }
+        delete_site_transient( self::cache_key() );
+        delete_site_transient( 'update_plugins' );
     }
 
     public static function normalize_source_folder( $source, $remote_source, $upgrader, $hook_extra ) {
