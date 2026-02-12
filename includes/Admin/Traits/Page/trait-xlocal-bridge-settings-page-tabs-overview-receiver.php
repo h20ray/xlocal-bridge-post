@@ -64,6 +64,7 @@ trait Xlocal_Bridge_Settings_Page_Tabs_Overview_Receiver_Trait {
         echo '<h2>Receiver Debug</h2>';
         echo '<p>Content-aware ingest logs: images, hosts, featured handling, taxonomy, and ingest result.</p>';
         echo '</div>';
+        echo '<p class="xlocal-field-hint">Production mode: success logs are compact by default; detailed taxonomy payload internals are kept mainly for non-success diagnostics.</p>';
         echo '<table class="form-table" role="presentation">';
         echo '<tr><th scope="row">Receiver Ingest Log</th><td>';
         $lines = array_filter( explode( "\n", (string) $receiver_debug_log_history ) );

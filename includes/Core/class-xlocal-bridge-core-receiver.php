@@ -876,6 +876,7 @@ class Xlocal_Bridge_Receiver {
         if ( empty( $options['receiver_enable_log'] ) ) {
             return;
         }
+        $context = self::compact_log_context( $status, $context );
         $stored = Xlocal_Bridge_Settings::get_options();
         $existing = isset( $stored['receiver_debug_log_history'] ) ? (string) $stored['receiver_debug_log_history'] : '';
         $lines = array_filter( explode( "\n", $existing ) );
@@ -894,6 +895,44 @@ class Xlocal_Bridge_Receiver {
         $lines = array_slice( $lines, -$cap );
         $stored['receiver_debug_log_history'] = implode( "\n", $lines );
         update_option( Xlocal_Bridge_Settings::OPTION_KEY, $stored );
+    }
+
+    private static function compact_log_context( $status, $context ) {
+        if ( ! is_array( $context ) ) {
+            return array();
+        }
+
+        $is_success = sanitize_key( (string) $status ) === 'success';
+        if ( $is_success ) {
+            unset( $context['payload_categories'] );
+            unset( $context['normalized_categories'] );
+            unset( $context['payload_tags'] );
+            unset( $context['normalized_tags'] );
+            unset( $context['category_term_ids'] );
+        }
+
+        // Trim large arrays for cleaner production logs while keeping signal.
+        foreach ( array( 'content_image_hosts', 'manifest_hosts' ) as $host_key ) {
+            if ( isset( $context[ $host_key ] ) && is_array( $context[ $host_key ] ) && count( $context[ $host_key ] ) > 10 ) {
+                $context[ $host_key ] = array_slice( $context[ $host_key ], 0, 10 );
+                $context[ $host_key . '_truncated' ] = true;
+            }
+        }
+
+        $clean = array();
+        foreach ( $context as $key => $value ) {
+            if ( is_string( $value ) && trim( $value ) === '' ) {
+                continue;
+            }
+            if ( is_array( $value ) && empty( $value ) ) {
+                continue;
+            }
+            if ( $value === null ) {
+                continue;
+            }
+            $clean[ sanitize_key( (string) $key ) ] = $value;
+        }
+        return $clean;
     }
 
     private static function allowed_tags_profile( $options ) {
