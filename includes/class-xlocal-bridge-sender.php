@@ -262,6 +262,62 @@ class Xlocal_Bridge_Sender {
         return strtolower( $target ) === strtolower( $local );
     }
 
+    /**
+     * Explicit bulk send for a single post.
+     *
+     * This is used by the Bulk Import admin tool and intentionally ignores
+     * sender_auto_send and REST_REQUEST guards, but still enforces:
+     * - correct post type
+     * - correct status (publish by default)
+     * - not a remote-ingested post
+     *
+     * Returns one of: sent, skipped_same_hash, skipped_remote, skipped_status, error.
+     */
+    public static function bulk_send_post( WP_Post $post, $options = null, $required_status = 'publish' ) {
+        $post_id = intval( $post->ID );
+
+        if ( ! $options ) {
+            $options = Xlocal_Bridge_Settings::get_options();
+        }
+
+        if ( ! self::is_sender_active( $options ) ) {
+            return 'error';
+        }
+
+        if ( $post->post_type !== $options['sender_target_post_type'] ) {
+            return 'skipped_status';
+        }
+
+        if ( $required_status && $post->post_status !== $required_status ) {
+            return 'skipped_status';
+        }
+
+        if ( ! empty( get_post_meta( $post_id, self::META_REMOTE_INGEST, true ) ) || ! empty( get_post_meta( $post_id, self::META_REMOTE_SOURCE, true ) ) ) {
+            return 'skipped_remote';
+        }
+
+        $payload = self::build_payload_from_post( $post, $options );
+        if ( is_wp_error( $payload ) ) {
+            self::store_last_result( $payload->get_error_message() );
+            return 'error';
+        }
+
+        $payload_hash = hash( 'sha256', wp_json_encode( $payload ) );
+        $last_hash    = (string) get_post_meta( $post_id, self::META_SENT_HASH, true );
+        if ( $last_hash !== '' && hash_equals( $last_hash, $payload_hash ) ) {
+            return 'skipped_same_hash';
+        }
+
+        if ( ! empty( $options['sender_dry_run'] ) ) {
+            self::store_last_result( 'Dry run (bulk): payload prepared for post ' . $post_id );
+            update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
+            return 'sent';
+        }
+
+        $sent = self::send_single_post( $post_id, $payload, $payload_hash, $options );
+        return $sent ? 'sent' : 'error';
+    }
+
     private static function send_single_post( $post_id, $payload, $payload_hash, $options ) {
         $endpoint = rtrim( $options['sender_main_base_url'], '/' ) . $options['sender_ingest_path'];
         $secret = Xlocal_Bridge_Settings::get_sender_secret();

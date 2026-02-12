@@ -340,13 +340,41 @@ class Xlocal_Bridge_Receiver {
     }
 
     private static function resolve_author( $payload, $options ) {
+        $allowed_roles = array( 'administrator', 'editor', 'author' );
+
+        // Random editor mode: pick random editor; fallback to admin if no editors.
+        if ( $options['receiver_author_mode'] === 'random_editor' ) {
+            $editors = get_users(
+                array(
+                    'role__in' => array( 'editor' ),
+                    'fields' => 'ID',
+                )
+            );
+            if ( ! empty( $editors ) ) {
+                $index = array_rand( $editors );
+                return intval( $editors[ $index ] );
+            }
+
+            // Fallback to first administrator if no editors exist.
+            $admins = get_users(
+                array(
+                    'role__in' => array( 'administrator' ),
+                    'number' => 1,
+                    'fields' => 'ID',
+                )
+            );
+            if ( ! empty( $admins ) ) {
+                return intval( $admins[0] );
+            }
+        }
+
         if ( $options['receiver_author_mode'] === 'by_name' && ! empty( $payload['author']['name'] ) ) {
             $name = sanitize_text_field( $payload['author']['name'] );
             $user = get_user_by( 'login', $name );
             if ( ! $user ) {
                 $user = get_user_by( 'display_name', $name );
             }
-            if ( $user ) {
+            if ( $user && ! empty( $user->roles ) && array_intersect( $user->roles, $allowed_roles ) ) {
                 return $user->ID;
             }
         }
@@ -354,7 +382,7 @@ class Xlocal_Bridge_Receiver {
         if ( $options['receiver_author_mode'] === 'by_email' && ! empty( $payload['author']['email'] ) ) {
             $email = sanitize_email( $payload['author']['email'] );
             $user = get_user_by( 'email', $email );
-            if ( $user ) {
+            if ( $user && ! empty( $user->roles ) && array_intersect( $user->roles, $allowed_roles ) ) {
                 return $user->ID;
             }
         }
