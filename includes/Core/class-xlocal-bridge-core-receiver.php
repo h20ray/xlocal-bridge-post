@@ -134,6 +134,7 @@ class Xlocal_Bridge_Receiver {
                     'prepend_featured_applied' => ! empty( $post_id['prepend_featured_applied'] ),
                     'featured_mode' => isset( $post_id['featured_mode'] ) ? sanitize_text_field( (string) $post_id['featured_mode'] ) : '',
                     'featured_status' => isset( $post_id['featured_status'] ) ? sanitize_text_field( (string) $post_id['featured_status'] ) : '',
+                    'featured_error' => isset( $post_id['featured_error'] ) ? sanitize_text_field( (string) $post_id['featured_error'] ) : '',
                 )
             )
         );
@@ -388,8 +389,13 @@ class Xlocal_Bridge_Receiver {
             update_post_meta( $post_id, '_xlocal_source_hash', sanitize_text_field( $payload['source_hash'] ) );
         }
 
+        $featured_result = array(
+            'mode' => '',
+            'status' => '',
+            'error' => '',
+        );
         if ( ! empty( $payload['featured_image'] ) && is_array( $payload['featured_image'] ) ) {
-            self::apply_featured_image( $post_id, $payload['featured_image'], $options );
+            $featured_result = self::apply_featured_image( $post_id, $payload['featured_image'], $options );
         }
 
         if ( ! empty( $payload['media_manifest'] ) && is_array( $payload['media_manifest'] ) ) {
@@ -404,8 +410,9 @@ class Xlocal_Bridge_Receiver {
             'post_id' => $post_id,
             'action' => $action,
             'prepend_featured_applied' => $prepend_featured_applied ? 1 : 0,
-            'featured_mode' => get_post_meta( $post_id, '_xlocal_featured_image_mode', true ),
-            'featured_status' => get_post_meta( $post_id, '_xlocal_featured_image_ingest_status', true ),
+            'featured_mode' => $featured_result['mode'] !== '' ? $featured_result['mode'] : get_post_meta( $post_id, '_xlocal_featured_image_mode', true ),
+            'featured_status' => $featured_result['status'] !== '' ? $featured_result['status'] : get_post_meta( $post_id, '_xlocal_featured_image_ingest_status', true ),
+            'featured_error' => $featured_result['error'] !== '' ? $featured_result['error'] : get_post_meta( $post_id, '_xlocal_featured_image_ingest_error', true ),
         );
     }
 
@@ -577,30 +584,64 @@ class Xlocal_Bridge_Receiver {
     }
 
     private static function apply_featured_image( $post_id, $image, $options ) {
+        $result = array(
+            'mode' => '',
+            'status' => '',
+            'error' => '',
+        );
+
         self::store_featured_meta( $post_id, $image );
 
         $mode = isset( $options['receiver_featured_image_mode'] ) ? $options['receiver_featured_image_mode'] : 'meta_only';
-        update_post_meta( $post_id, '_xlocal_featured_image_mode', sanitize_key( $mode ) );
+        $mode = sanitize_key( $mode );
+        $result['mode'] = $mode;
+        update_post_meta( $post_id, '_xlocal_featured_image_mode', $mode );
+
         if ( $mode !== 'virtual_attachment' ) {
             update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'meta_only' );
-            return;
+            delete_post_meta( $post_id, '_xlocal_featured_image_ingest_error' );
+            $result['status'] = 'meta_only';
+            return $result;
         }
 
         if ( empty( $image['url'] ) ) {
+            $error = 'Featured payload is missing URL.';
             update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'missing_url' );
-            return;
+            update_post_meta( $post_id, '_xlocal_featured_image_ingest_error', $error );
+            $result['status'] = 'missing_url';
+            $result['error'] = $error;
+            return $result;
         }
 
         $attachment_id = self::find_attachment_by_source_url( $image['url'] );
         if ( ! $attachment_id ) {
             $attachment_id = self::sideload_featured_attachment( $image['url'], $post_id, isset( $image['alt'] ) ? $image['alt'] : '' );
         }
-        if ( $attachment_id ) {
+
+        if ( is_int( $attachment_id ) && $attachment_id > 0 ) {
             set_post_thumbnail( $post_id, $attachment_id );
             update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'attached:' . intval( $attachment_id ) );
-        } else {
-            update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'attachment_failed' );
+            delete_post_meta( $post_id, '_xlocal_featured_image_ingest_error' );
+            $result['status'] = 'attached:' . intval( $attachment_id );
+            return $result;
         }
+
+        $error_message = 'Unknown media sideload failure.';
+        $error_code = '';
+        if ( is_wp_error( $attachment_id ) ) {
+            $error_message = $attachment_id->get_error_message();
+            $error_code = (string) $attachment_id->get_error_code();
+        }
+        $status = 'attachment_failed';
+        if ( $error_code !== '' ) {
+            $status .= ':' . sanitize_key( $error_code );
+        }
+
+        update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', $status );
+        update_post_meta( $post_id, '_xlocal_featured_image_ingest_error', sanitize_text_field( $error_message ) );
+        $result['status'] = $status;
+        $result['error'] = sanitize_text_field( $error_message );
+        return $result;
     }
 
     private static function find_attachment_by_source_url( $url ) {
@@ -625,6 +666,13 @@ class Xlocal_Bridge_Receiver {
         return 0;
     }
 
+    public static function allow_sideload_image_extensions( $extensions ) {
+        $extensions = is_array( $extensions ) ? $extensions : array();
+        $extensions = array_map( 'strtolower', $extensions );
+        $extensions[] = 'avif';
+        return array_values( array_unique( $extensions ) );
+    }
+
     private static function sideload_featured_attachment( $url, $post_id, $alt ) {
         if ( ! function_exists( 'media_sideload_image' ) ) {
             require_once ABSPATH . 'wp-admin/includes/media.php';
@@ -636,9 +684,11 @@ class Xlocal_Bridge_Receiver {
             require_once ABSPATH . 'wp-admin/includes/image.php';
         }
 
+        add_filter( 'image_sideload_extensions', array( __CLASS__, 'allow_sideload_image_extensions' ) );
         $attachment_id = media_sideload_image( esc_url_raw( $url ), $post_id, null, 'id' );
+        remove_filter( 'image_sideload_extensions', array( __CLASS__, 'allow_sideload_image_extensions' ) );
         if ( is_wp_error( $attachment_id ) ) {
-            return 0;
+            return $attachment_id;
         }
 
         update_post_meta( intval( $attachment_id ), '_xlocal_featured_source_url', esc_url_raw( $url ) );
