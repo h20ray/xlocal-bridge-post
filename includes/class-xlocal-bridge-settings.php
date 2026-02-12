@@ -14,6 +14,7 @@ class Xlocal_Bridge_Settings {
         add_action( 'admin_post_xlocal_sender_test', array( __CLASS__, 'handle_test_payload' ) );
         add_action( 'admin_post_xlocal_bulk_send_run', array( __CLASS__, 'handle_bulk_send' ) );
         add_action( 'admin_post_xlocal_check_updates_now', array( __CLASS__, 'handle_check_updates_now' ) );
+        add_action( 'admin_post_xlocal_update_plugin_now', array( __CLASS__, 'handle_update_plugin_now' ) );
         add_action( 'admin_post_update', array( __CLASS__, 'maybe_handle_bulk_send_from_update_route' ) );
         add_action( 'admin_post_xlocal_bulk_import_run', array( __CLASS__, 'handle_bulk_import' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
@@ -453,10 +454,7 @@ class Xlocal_Bridge_Settings {
             echo '<p>Latest Cached Commit: <code>' . esc_html( $cached_commit ) . '</code>, Version: <code>' . esc_html( $cached_version ) . '</code></p>';
             if ( $update_available ) {
                 $plugin_file = Xlocal_Bridge_Updater::plugin_file();
-                $upgrade_url = wp_nonce_url(
-                    self_admin_url( 'update.php?action=upgrade-plugin&plugin=' . urlencode( $plugin_file ) ),
-                    'upgrade-plugin_' . $plugin_file
-                );
+                $upgrade_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_update_plugin_now' ), 'xlocal_update_plugin_now' );
                 echo '<p><strong>Update Available:</strong> <code>' . esc_html( $new_version ) . '</code></p>';
                 echo '<p><a href="' . esc_url( $upgrade_url ) . '" class="button button-primary">Update Plugin Now</a></p>';
             } else {
@@ -1160,6 +1158,34 @@ class Xlocal_Bridge_Settings {
             'success'
         );
         wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
+        exit;
+    }
+
+    public static function handle_update_plugin_now() {
+        if ( ! current_user_can( 'update_plugins' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+        check_admin_referer( 'xlocal_update_plugin_now' );
+
+        if ( ! class_exists( 'Xlocal_Bridge_Updater' ) ) {
+            self::set_notice( 'Updater class is not loaded.', 'error' );
+            wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
+            exit;
+        }
+
+        $snapshot = Xlocal_Bridge_Updater::force_refresh();
+        if ( ! empty( $snapshot['cached_commit'] ) ) {
+            Xlocal_Bridge_Updater::set_pending_commit( $snapshot['cached_commit'] );
+        } else {
+            Xlocal_Bridge_Updater::set_pending_commit( '' );
+        }
+
+        $plugin_file = Xlocal_Bridge_Updater::plugin_file();
+        $upgrade_url = wp_nonce_url(
+            self_admin_url( 'update.php?action=upgrade-plugin&plugin=' . urlencode( $plugin_file ) ),
+            'upgrade-plugin_' . $plugin_file
+        );
+        wp_safe_redirect( $upgrade_url );
         exit;
     }
 

@@ -7,6 +7,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Xlocal_Bridge_Updater {
     const CACHE_TTL = 21600; // 6 hours.
     const INSTALLED_COMMIT_OPTION = 'xlocal_bridge_updater_installed_commit';
+    const PENDING_COMMIT_OPTION = 'xlocal_bridge_updater_pending_commit';
     const DEFAULT_REPO = 'h20ray/xlocal-bridge-post';
     const DEFAULT_BRANCH = 'main';
 
@@ -108,9 +109,13 @@ class Xlocal_Bridge_Updater {
                     $commit = (string) $fresh['commit'];
                 }
             }
+            if ( $commit === '' ) {
+                $commit = (string) get_option( self::PENDING_COMMIT_OPTION, '' );
+            }
             if ( $commit !== '' ) {
                 update_option( self::INSTALLED_COMMIT_OPTION, sanitize_text_field( $commit ), false );
             }
+            delete_option( self::PENDING_COMMIT_OPTION );
         }
         delete_site_transient( self::cache_key() );
         delete_site_transient( 'update_plugins' );
@@ -191,6 +196,15 @@ class Xlocal_Bridge_Updater {
             wp_update_plugins();
         }
         return self::status_snapshot();
+    }
+
+    public static function set_pending_commit( $commit ) {
+        $commit = sanitize_text_field( (string) $commit );
+        if ( $commit === '' ) {
+            delete_option( self::PENDING_COMMIT_OPTION );
+            return;
+        }
+        update_option( self::PENDING_COMMIT_OPTION, $commit, false );
     }
 
     private static function is_update_available( $payload ) {
