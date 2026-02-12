@@ -11,6 +11,7 @@ All notable changes to this project are documented in this file.
 - Built-in GitHub updater integration for wp-admin update notices and one-click upgrades.
 - New settings status badge for updater configuration visibility.
 - Default updater source now points to official repo (`h20ray/xlocal-bridge-post`) without requiring `wp-config.php` edits.
+- GitHub Actions workflow to publish a fixed-root plugin ZIP asset on each `main` commit (`commit-main` rolling release).
 
 ### Changed
 - Sender retry flow now regenerates `X-Xlocal-Timestamp`, `X-Xlocal-Nonce`, and `X-Xlocal-Signature` on every retry attempt.
@@ -19,6 +20,7 @@ All notable changes to this project are documented in this file.
 - Bulk send post type validation now follows the selected bulk post type from UI.
 - Bulk query remote-source guard relation tightened for safer filtering.
 - Updater now supports channels: `commit` (default) and `release`.
+- Commit-mode updater now prefers rolling release asset ZIP (fixed root folder) and falls back to codeload when unavailable.
 - Plugin version bumped to `0.5.1`.
 - Admin asset cache-busting version bumped to `0.5.1`.
 

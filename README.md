@@ -334,3 +334,5 @@ Catatan:
 - Channel `commit` menggunakan commit terbaru dari branch.
 - Channel `release` menggunakan GitHub release stabil (non-draft, non-prerelease).
 - Tanpa konfigurasi apa pun, updater tetap aktif ke repo resmi.
+- Untuk stabilitas update commit-mode di wp-admin, repo ini menyediakan rolling release asset:
+  `https://github.com/h20ray/xlocal-bridge-post/releases/download/commit-main/xlocal-bridge-post.zip`

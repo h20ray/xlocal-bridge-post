@@ -146,12 +146,14 @@ class Xlocal_Bridge_Sender {
             if ( ! empty( $options['sender_dry_run'] ) ) {
                 self::store_last_result( 'Dry run: payload prepared for post ' . $post_id );
                 update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
+                self::debug_log( 'Dry run prepared for post ' . $post_id, $options );
                 return;
             }
 
             if ( $options['sender_sync_mode'] === 'batch' ) {
                 self::queue_post( $post_id, $payload_hash );
                 self::store_last_result( 'Queued post ' . $post_id . ' for batch send.' );
+                self::debug_log( 'Queued post ' . $post_id . ' for batch send.', $options );
                 return;
             }
 
@@ -290,6 +292,7 @@ class Xlocal_Bridge_Sender {
         }
 
         if ( ! self::is_sender_active( $options ) ) {
+            self::debug_log( 'Bulk send skipped: sender mode inactive for post ' . $post_id, $options );
             return 'error';
         }
 
@@ -298,36 +301,45 @@ class Xlocal_Bridge_Sender {
         }
 
         if ( $post->post_type !== $required_post_type ) {
+            self::debug_log( 'Bulk send skipped post ' . $post_id . ': post type mismatch (' . $post->post_type . ' != ' . $required_post_type . ')', $options );
             return 'skipped_post_type';
         }
 
         if ( $required_status && $post->post_status !== $required_status ) {
+            self::debug_log( 'Bulk send skipped post ' . $post_id . ': status mismatch (' . $post->post_status . ' != ' . $required_status . ')', $options );
             return 'skipped_status';
         }
 
         if ( ! empty( get_post_meta( $post_id, self::META_REMOTE_INGEST, true ) ) || ! empty( get_post_meta( $post_id, self::META_REMOTE_SOURCE, true ) ) ) {
+            self::debug_log( 'Bulk send skipped post ' . $post_id . ': remote-sourced marker found.', $options );
             return 'skipped_remote';
         }
 
         $payload = self::build_payload_from_post( $post, $options );
         if ( is_wp_error( $payload ) ) {
             self::store_last_result( $payload->get_error_message() );
+            self::debug_log( 'Bulk payload build failed for post ' . $post_id . ': ' . $payload->get_error_message(), $options );
             return 'error';
         }
 
         $payload_hash = hash( 'sha256', wp_json_encode( $payload ) );
         $last_hash    = (string) get_post_meta( $post_id, self::META_SENT_HASH, true );
         if ( $last_hash !== '' && hash_equals( $last_hash, $payload_hash ) ) {
+            self::debug_log( 'Bulk send skipped post ' . $post_id . ': payload hash unchanged.', $options );
             return 'skipped_same_hash';
         }
 
         if ( ! empty( $options['sender_dry_run'] ) ) {
             self::store_last_result( 'Dry run (bulk): payload prepared for post ' . $post_id );
             update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
+            self::debug_log( 'Bulk dry run prepared for post ' . $post_id, $options );
             return 'sent';
         }
 
         $sent = self::send_single_post( $post_id, $payload, $payload_hash, $options );
+        if ( $sent ) {
+            self::debug_log( 'Bulk send success for post ' . $post_id, $options );
+        }
         return $sent ? 'sent' : 'error';
     }
 
@@ -348,6 +360,8 @@ class Xlocal_Bridge_Sender {
         $code = isset( $result['code'] ) ? intval( $result['code'] ) : 500;
         if ( $code >= 200 && $code < 300 ) {
             update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
+            $attempts = isset( $result['attempts'] ) ? intval( $result['attempts'] ) : 1;
+            self::debug_log( 'Send success for post ' . $post_id . ': HTTP ' . $code . ' in ' . $attempts . ' attempt(s).', $options );
             return true;
         }
 

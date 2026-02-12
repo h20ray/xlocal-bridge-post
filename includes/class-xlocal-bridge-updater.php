@@ -10,6 +10,8 @@ class Xlocal_Bridge_Updater {
     const PENDING_COMMIT_OPTION = 'xlocal_bridge_updater_pending_commit';
     const DEFAULT_REPO = 'h20ray/xlocal-bridge-post';
     const DEFAULT_BRANCH = 'main';
+    const DEFAULT_COMMIT_RELEASE_TAG = 'commit-main';
+    const DEFAULT_COMMIT_ASSET_NAME = 'xlocal-bridge-post.zip';
 
     public static function init() {
         add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject_update' ) );
@@ -307,8 +309,7 @@ class Xlocal_Bridge_Updater {
                 'version'      => self::current_version() . '.' . gmdate( 'YmdHis', $timestamp ),
                 'changelog'    => 'Latest commit from branch ' . self::branch() . ': ' . substr( $sha, 0, 12 ),
                 'homepage'     => isset( $json['html_url'] ) ? esc_url_raw( (string) $json['html_url'] ) : '',
-                // Use codeload URL for WP upgrader compatibility.
-                'package'      => 'https://codeload.github.com/' . $repo . '/zip/' . rawurlencode( $sha ),
+                'package'      => self::resolve_commit_package_url( $repo, $sha, $headers ),
                 'published_at' => $published_at,
                 'commit'       => $sha,
             );
@@ -368,6 +369,49 @@ class Xlocal_Bridge_Updater {
         $token = defined( 'XLOCAL_BRIDGE_GITHUB_TOKEN' ) ? trim( (string) XLOCAL_BRIDGE_GITHUB_TOKEN ) : '';
         $token = apply_filters( 'xlocal_bridge_github_token', $token );
         return is_string( $token ) ? trim( $token ) : '';
+    }
+
+    private static function resolve_commit_package_url( $repo, $sha, $headers ) {
+        $asset_url = self::commit_asset_url( $repo );
+        if ( $asset_url !== '' ) {
+            $head = wp_remote_head(
+                $asset_url,
+                array(
+                    'timeout' => 12,
+                    'headers' => $headers,
+                    'redirection' => 5,
+                )
+            );
+            if ( ! is_wp_error( $head ) ) {
+                $code = wp_remote_retrieve_response_code( $head );
+                if ( $code >= 200 && $code < 400 ) {
+                    return $asset_url;
+                }
+            }
+        }
+
+        // Fallback for environments without commit release asset yet.
+        return 'https://codeload.github.com/' . $repo . '/zip/' . rawurlencode( $sha );
+    }
+
+    private static function commit_asset_url( $repo ) {
+        $url = 'https://github.com/' . $repo . '/releases/download/' . self::commit_release_tag() . '/' . self::commit_asset_name();
+        $url = apply_filters( 'xlocal_bridge_github_commit_asset_url', $url, $repo );
+        return is_string( $url ) ? esc_url_raw( $url ) : '';
+    }
+
+    private static function commit_release_tag() {
+        $tag = defined( 'XLOCAL_BRIDGE_GITHUB_COMMIT_RELEASE_TAG' ) ? trim( (string) XLOCAL_BRIDGE_GITHUB_COMMIT_RELEASE_TAG ) : self::DEFAULT_COMMIT_RELEASE_TAG;
+        $tag = apply_filters( 'xlocal_bridge_github_commit_release_tag', $tag );
+        $tag = sanitize_text_field( $tag );
+        return $tag !== '' ? $tag : self::DEFAULT_COMMIT_RELEASE_TAG;
+    }
+
+    private static function commit_asset_name() {
+        $name = defined( 'XLOCAL_BRIDGE_GITHUB_COMMIT_ASSET_NAME' ) ? trim( (string) XLOCAL_BRIDGE_GITHUB_COMMIT_ASSET_NAME ) : self::DEFAULT_COMMIT_ASSET_NAME;
+        $name = apply_filters( 'xlocal_bridge_github_commit_asset_name', $name );
+        $name = sanitize_file_name( $name );
+        return $name !== '' ? $name : self::DEFAULT_COMMIT_ASSET_NAME;
     }
 
     private static function channel() {

@@ -1,0 +1,41 @@
+name: Commit Release Asset
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build plugin zip (fixed root folder)
+        run: |
+          set -euo pipefail
+          mkdir -p dist/xlocal-bridge-post
+          rsync -av \
+            --exclude=".git" \
+            --exclude=".github" \
+            --exclude="dist" \
+            --exclude=".DS_Store" \
+            ./ dist/xlocal-bridge-post/
+          cd dist
+          zip -r xlocal-bridge-post.zip xlocal-bridge-post
+
+      - name: Publish rolling commit release asset
+        uses: ncipollo/release-action@v1
+        with:
+          tag: commit-main
+          name: Commit Main (rolling)
+          allowUpdates: true
+          replacesArtifacts: true
+          makeLatest: false
+          prerelease: true
+          artifacts: dist/xlocal-bridge-post.zip
