@@ -141,6 +141,10 @@ class Xlocal_Bridge_Receiver {
                     'tag_taxonomy_supported' => ! empty( $post_id['tag_taxonomy_supported'] ),
                     'category_taxonomy_error' => isset( $post_id['category_taxonomy_error'] ) ? sanitize_text_field( (string) $post_id['category_taxonomy_error'] ) : '',
                     'tag_taxonomy_error' => isset( $post_id['tag_taxonomy_error'] ) ? sanitize_text_field( (string) $post_id['tag_taxonomy_error'] ) : '',
+                    'payload_categories' => isset( $post_id['payload_categories'] ) && is_array( $post_id['payload_categories'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['payload_categories'] ) ) : array(),
+                    'normalized_categories' => isset( $post_id['normalized_categories'] ) && is_array( $post_id['normalized_categories'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['normalized_categories'] ) ) : array(),
+                    'payload_tags' => isset( $post_id['payload_tags'] ) && is_array( $post_id['payload_tags'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['payload_tags'] ) ) : array(),
+                    'normalized_tags' => isset( $post_id['normalized_tags'] ) && is_array( $post_id['normalized_tags'] ) ? array_values( array_map( 'sanitize_text_field', $post_id['normalized_tags'] ) ) : array(),
                 )
             )
         );
@@ -425,6 +429,10 @@ class Xlocal_Bridge_Receiver {
             'tag_taxonomy_supported' => ! empty( $taxonomy_result['tag_taxonomy_supported'] ) ? 1 : 0,
             'category_taxonomy_error' => isset( $taxonomy_result['category_taxonomy_error'] ) ? sanitize_text_field( (string) $taxonomy_result['category_taxonomy_error'] ) : '',
             'tag_taxonomy_error' => isset( $taxonomy_result['tag_taxonomy_error'] ) ? sanitize_text_field( (string) $taxonomy_result['tag_taxonomy_error'] ) : '',
+            'payload_categories' => isset( $taxonomy_result['payload_categories'] ) && is_array( $taxonomy_result['payload_categories'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['payload_categories'] ) ) : array(),
+            'normalized_categories' => isset( $taxonomy_result['normalized_categories'] ) && is_array( $taxonomy_result['normalized_categories'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['normalized_categories'] ) ) : array(),
+            'payload_tags' => isset( $taxonomy_result['payload_tags'] ) && is_array( $taxonomy_result['payload_tags'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['payload_tags'] ) ) : array(),
+            'normalized_tags' => isset( $taxonomy_result['normalized_tags'] ) && is_array( $taxonomy_result['normalized_tags'] ) ? array_values( array_map( 'sanitize_text_field', $taxonomy_result['normalized_tags'] ) ) : array(),
         );
     }
 
@@ -515,12 +523,18 @@ class Xlocal_Bridge_Receiver {
             'tag_taxonomy_supported' => false,
             'category_taxonomy_error' => '',
             'tag_taxonomy_error' => '',
+            'payload_categories' => array(),
+            'normalized_categories' => array(),
+            'payload_tags' => array(),
+            'normalized_tags' => array(),
         );
 
         $post_type = get_post_type( $post_id );
 
         if ( ! empty( $payload['categories'] ) && is_array( $payload['categories'] ) ) {
+            $result['payload_categories'] = array_values( array_map( 'sanitize_text_field', $payload['categories'] ) );
             $cats = self::normalize_terms( $payload['categories'], $options['receiver_category_mapping_rules'], $options['receiver_tag_normalization'] );
+            $result['normalized_categories'] = array_values( array_map( 'sanitize_text_field', $cats ) );
             $result['category_taxonomy_supported'] = (bool) is_object_in_taxonomy( $post_type, 'category' );
             if ( ! $result['category_taxonomy_supported'] ) {
                 $result['category_taxonomy_error'] = 'Taxonomy "category" is not registered for post type "' . sanitize_key( (string) $post_type ) . '".';
@@ -538,7 +552,9 @@ class Xlocal_Bridge_Receiver {
         }
 
         if ( ! empty( $payload['tags'] ) && is_array( $payload['tags'] ) ) {
+            $result['payload_tags'] = array_values( array_map( 'sanitize_text_field', $payload['tags'] ) );
             $tags = self::normalize_terms( $payload['tags'], '', $options['receiver_tag_normalization'] );
+            $result['normalized_tags'] = array_values( array_map( 'sanitize_text_field', $tags ) );
             $result['tag_taxonomy_supported'] = (bool) is_object_in_taxonomy( $post_type, 'post_tag' );
             if ( ! $result['tag_taxonomy_supported'] ) {
                 $result['tag_taxonomy_error'] = 'Taxonomy "post_tag" is not registered for post type "' . sanitize_key( (string) $post_type ) . '".';
