@@ -16,7 +16,6 @@ class Xlocal_Bridge_Settings {
         add_action( 'admin_post_xlocal_check_updates_now', array( __CLASS__, 'handle_check_updates_now' ) );
         add_action( 'admin_post_xlocal_update_plugin_now', array( __CLASS__, 'handle_update_plugin_now' ) );
         add_action( 'admin_post_xlocal_clear_sender_debug_logs', array( __CLASS__, 'handle_clear_sender_debug_logs' ) );
-        add_action( 'admin_post_update', array( __CLASS__, 'maybe_handle_bulk_send_from_update_route' ) );
         add_action( 'admin_post_xlocal_bulk_import_run', array( __CLASS__, 'handle_bulk_import' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
     }
@@ -1164,23 +1163,6 @@ class Xlocal_Bridge_Settings {
     }
 
     public static function handle_bulk_import() {
-        self::handle_bulk_send();
-    }
-
-    public static function maybe_handle_bulk_send_from_update_route() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            return;
-        }
-        $is_bulk_send = false;
-        if ( isset( $_POST['action'] ) && sanitize_key( (string) $_POST['action'] ) === 'xlocal_bulk_send_run' ) {
-            $is_bulk_send = true;
-        }
-        if ( isset( $_POST['xlocal_bulk_send_nonce'] ) || isset( $_POST['xlocal_bulk_import_nonce'] ) ) {
-            $is_bulk_send = true;
-        }
-        if ( ! $is_bulk_send ) {
-            return;
-        }
         self::handle_bulk_send();
     }
 

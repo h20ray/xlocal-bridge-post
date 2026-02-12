@@ -377,6 +377,8 @@ class Xlocal_Bridge_Sender {
         }
 
         $content_html = (string) $post->post_content;
+        $rewrite_report = array();
+        $content_html = self::normalize_content_images( $content_html, $rewrite_report );
         $img_urls = self::extract_img_srcs( $content_html );
         $featured = self::build_featured_image_data( $post_id );
         if ( ! empty( $featured['url'] ) ) {
@@ -395,6 +397,8 @@ class Xlocal_Bridge_Sender {
                 }
             }
         }
+
+        self::log_payload_media_diagnostics( $post_id, $source_url, $img_urls, $featured, $rewrite_report, $options );
 
         $payload = array(
             'ingest_id' => wp_generate_uuid4(),
@@ -461,12 +465,176 @@ class Xlocal_Bridge_Sender {
         if ( ! is_string( $html ) || $html === '' ) {
             return $urls;
         }
-        if ( preg_match_all( '/<img[^>]+src=["\']([^"\']+)["\']/i', $html, $matches ) ) {
-            foreach ( $matches[1] as $src ) {
-                $urls[] = $src;
+        if ( preg_match_all( '/<img[^>]+>/i', $html, $img_tags ) ) {
+            foreach ( $img_tags[0] as $img_tag ) {
+                $src = self::extract_attribute_value( $img_tag, 'src' );
+                if ( $src !== '' ) {
+                    $urls[] = $src;
+                }
+                $srcset = self::extract_attribute_value( $img_tag, 'srcset' );
+                if ( $srcset !== '' ) {
+                    foreach ( explode( ',', $srcset ) as $candidate ) {
+                        $candidate = trim( $candidate );
+                        if ( $candidate === '' ) {
+                            continue;
+                        }
+                        $parts = preg_split( '/\s+/', $candidate );
+                        if ( ! empty( $parts[0] ) ) {
+                            $urls[] = $parts[0];
+                        }
+                    }
+                }
             }
         }
         return $urls;
+    }
+
+    private static function normalize_content_images( $html, &$report ) {
+        $report = array(
+            'tags_total' => 0,
+            'ids_found' => 0,
+            'src_replaced' => 0,
+            'srcset_replaced' => 0,
+            'ids_missing_url' => 0,
+        );
+        if ( ! is_string( $html ) || $html === '' ) {
+            return '';
+        }
+
+        return preg_replace_callback(
+            '/<img\b[^>]*>/i',
+            function( $matches ) use ( &$report ) {
+                $tag = $matches[0];
+                $report['tags_total']++;
+
+                $attachment_id = self::extract_attachment_id_from_tag( $tag );
+                if ( $attachment_id <= 0 ) {
+                    return $tag;
+                }
+
+                $report['ids_found']++;
+                $new_src = wp_get_attachment_image_url( $attachment_id, 'full' );
+                if ( empty( $new_src ) ) {
+                    $new_src = wp_get_attachment_url( $attachment_id );
+                }
+                if ( empty( $new_src ) ) {
+                    $report['ids_missing_url']++;
+                    return $tag;
+                }
+
+                $new_srcset = wp_get_attachment_image_srcset( $attachment_id, 'full' );
+                $updated_tag = self::replace_attribute_value( $tag, 'src', esc_url_raw( $new_src ) );
+                $report['src_replaced']++;
+                if ( is_string( $new_srcset ) && $new_srcset !== '' ) {
+                    $updated_tag = self::replace_attribute_value( $updated_tag, 'srcset', esc_attr( $new_srcset ) );
+                    $report['srcset_replaced']++;
+                }
+
+                return $updated_tag;
+            },
+            $html
+        );
+    }
+
+    private static function extract_attachment_id_from_tag( $img_tag ) {
+        if ( ! is_string( $img_tag ) || $img_tag === '' ) {
+            return 0;
+        }
+
+        $class_attr = self::extract_attribute_value( $img_tag, 'class' );
+        if ( $class_attr !== '' && preg_match( '/\bwp-image-(\d+)\b/i', $class_attr, $class_matches ) ) {
+            return intval( $class_matches[1] );
+        }
+
+        $data_id_attr = self::extract_attribute_value( $img_tag, 'data-id' );
+        if ( $data_id_attr !== '' ) {
+            return intval( $data_id_attr );
+        }
+
+        return 0;
+    }
+
+    private static function replace_attribute_value( $tag, $attribute, $value ) {
+        $attribute = strtolower( (string) $attribute );
+        if ( $attribute === '' ) {
+            return $tag;
+        }
+        $pattern = '/\s' . preg_quote( $attribute, '/' ) . '\s*=\s*(["\']).*?\1/i';
+        $replacement = ' ' . $attribute . '="' . $value . '"';
+        if ( preg_match( $pattern, $tag ) ) {
+            return preg_replace( $pattern, $replacement, $tag, 1 );
+        }
+        return preg_replace( '/\s*\/?>$/', $replacement . '$0', $tag, 1 );
+    }
+
+    private static function extract_attribute_value( $tag, $attribute ) {
+        $attribute = strtolower( (string) $attribute );
+        if ( $attribute === '' ) {
+            return '';
+        }
+
+        if ( preg_match( '/\s' . preg_quote( $attribute, '/' ) . '\s*=\s*(["\'])(.*?)\1/i', $tag, $matches ) ) {
+            return html_entity_decode( (string) $matches[2], ENT_QUOTES, 'UTF-8' );
+        }
+
+        return '';
+    }
+
+    private static function log_payload_media_diagnostics( $post_id, $source_url, $img_urls, $featured, $rewrite_report, $options ) {
+        if ( empty( $options['sender_debug_logs'] ) ) {
+            return;
+        }
+
+        $hosts = array();
+        foreach ( $img_urls as $url ) {
+            $host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+            if ( $host !== '' ) {
+                $hosts[ $host ] = true;
+            }
+        }
+
+        $host_list = implode( ', ', array_keys( $hosts ) );
+        if ( $host_list === '' ) {
+            $host_list = '(none)';
+        }
+
+        $featured_host = '';
+        if ( ! empty( $featured['url'] ) ) {
+            $featured_host = strtolower( (string) wp_parse_url( $featured['url'], PHP_URL_HOST ) );
+        }
+        if ( $featured_host === '' ) {
+            $featured_host = '(none)';
+        }
+
+        $cdn_host = strtolower( (string) wp_parse_url( $options['sender_cdn_base'], PHP_URL_HOST ) );
+        if ( $cdn_host === '' ) {
+            $cdn_host = '(not set)';
+        }
+
+        $non_cdn_count = 0;
+        if ( ! empty( $options['sender_ensure_cdn_urls'] ) && $cdn_host !== '(not set)' ) {
+            foreach ( $img_urls as $url ) {
+                $host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+                if ( $host !== '' && $host !== $cdn_host ) {
+                    $non_cdn_count++;
+                }
+            }
+        }
+
+        $source_host = strtolower( (string) wp_parse_url( $source_url, PHP_URL_HOST ) );
+        self::debug_log(
+            'Payload media diagnostics for post ' . intval( $post_id ) .
+            ': source_host=' . $source_host .
+            '; image_urls=' . count( $img_urls ) .
+            '; image_hosts=' . $host_list .
+            '; featured_host=' . $featured_host .
+            '; cdn_host=' . $cdn_host .
+            '; non_cdn=' . intval( $non_cdn_count ) .
+            '; rewritten_img_tags=' . intval( isset( $rewrite_report['src_replaced'] ) ? $rewrite_report['src_replaced'] : 0 ) .
+            '; rewritten_srcset=' . intval( isset( $rewrite_report['srcset_replaced'] ) ? $rewrite_report['srcset_replaced'] : 0 ) .
+            '; unresolved_attachment_ids=' . intval( isset( $rewrite_report['ids_missing_url'] ) ? $rewrite_report['ids_missing_url'] : 0 ),
+            $options
+        );
     }
 
     private static function queue_post( $post_id, $payload_hash ) {

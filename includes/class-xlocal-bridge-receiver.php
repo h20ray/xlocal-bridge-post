@@ -211,12 +211,56 @@ class Xlocal_Bridge_Receiver {
         if ( ! is_string( $html ) || $html === '' ) {
             return $urls;
         }
-        if ( preg_match_all( '/<img[^>]+src=["\"]([^"\"]+)["\"]/i', $html, $matches ) ) {
-            foreach ( $matches[1] as $src ) {
-                $urls[] = $src;
+        if ( preg_match_all( '/<img[^>]+>/i', $html, $img_tags ) ) {
+            foreach ( $img_tags[0] as $img_tag ) {
+                $src = self::extract_attribute_value( $img_tag, 'src' );
+                if ( $src !== '' ) {
+                    $urls[] = $src;
+                }
+                $data_src = self::extract_attribute_value( $img_tag, 'data-src' );
+                if ( $data_src !== '' ) {
+                    $urls[] = $data_src;
+                }
+                $srcset = self::extract_attribute_value( $img_tag, 'srcset' );
+                if ( $srcset !== '' ) {
+                    foreach ( explode( ',', $srcset ) as $candidate ) {
+                        $candidate = trim( $candidate );
+                        if ( $candidate === '' ) {
+                            continue;
+                        }
+                        $parts = preg_split( '/\s+/', $candidate );
+                        if ( ! empty( $parts[0] ) ) {
+                            $urls[] = $parts[0];
+                        }
+                    }
+                }
+                $data_srcset = self::extract_attribute_value( $img_tag, 'data-srcset' );
+                if ( $data_srcset !== '' ) {
+                    foreach ( explode( ',', $data_srcset ) as $candidate ) {
+                        $candidate = trim( $candidate );
+                        if ( $candidate === '' ) {
+                            continue;
+                        }
+                        $parts = preg_split( '/\s+/', $candidate );
+                        if ( ! empty( $parts[0] ) ) {
+                            $urls[] = $parts[0];
+                        }
+                    }
+                }
             }
         }
         return $urls;
+    }
+
+    private static function extract_attribute_value( $tag, $attribute ) {
+        $attribute = strtolower( (string) $attribute );
+        if ( $attribute === '' ) {
+            return '';
+        }
+        if ( preg_match( '/\s' . preg_quote( $attribute, '/' ) . '\s*=\s*(["\'])(.*?)\1/i', $tag, $matches ) ) {
+            return html_entity_decode( (string) $matches[2], ENT_QUOTES, 'UTF-8' );
+        }
+        return '';
     }
 
     private static function upsert_post( $payload, $options ) {
@@ -481,11 +525,14 @@ class Xlocal_Bridge_Receiver {
         self::store_featured_meta( $post_id, $image );
 
         $mode = isset( $options['receiver_featured_image_mode'] ) ? $options['receiver_featured_image_mode'] : 'meta_only';
+        update_post_meta( $post_id, '_xlocal_featured_image_mode', sanitize_key( $mode ) );
         if ( $mode !== 'virtual_attachment' ) {
+            update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'meta_only' );
             return;
         }
 
         if ( empty( $image['url'] ) ) {
+            update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'missing_url' );
             return;
         }
 
@@ -495,6 +542,9 @@ class Xlocal_Bridge_Receiver {
         }
         if ( $attachment_id ) {
             set_post_thumbnail( $post_id, $attachment_id );
+            update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'attached:' . intval( $attachment_id ) );
+        } else {
+            update_post_meta( $post_id, '_xlocal_featured_image_ingest_status', 'attachment_failed' );
         }
     }
 
@@ -570,7 +620,20 @@ class Xlocal_Bridge_Receiver {
                 'strong' => array(),
                 'em' => array(),
                 'a' => array( 'href' => true, 'title' => true, 'rel' => true, 'target' => true ),
-                'img' => array( 'src' => true, 'alt' => true, 'width' => true, 'height' => true, 'loading' => true ),
+                'img' => array(
+                    'src' => true,
+                    'srcset' => true,
+                    'sizes' => true,
+                    'data-src' => true,
+                    'data-srcset' => true,
+                    'alt' => true,
+                    'width' => true,
+                    'height' => true,
+                    'loading' => true,
+                    'decoding' => true,
+                    'fetchpriority' => true,
+                    'class' => true,
+                ),
                 'ul' => array(),
                 'ol' => array(),
                 'li' => array(),
