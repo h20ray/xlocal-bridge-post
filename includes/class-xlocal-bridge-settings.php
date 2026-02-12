@@ -1149,7 +1149,12 @@ class Xlocal_Bridge_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Unauthorized' );
         }
-        check_admin_referer( 'xlocal_check_updates_now' );
+        $nonce = isset( $_REQUEST['_wpnonce'] ) ? sanitize_text_field( (string) $_REQUEST['_wpnonce'] ) : '';
+        if ( ! wp_verify_nonce( $nonce, 'xlocal_check_updates_now' ) ) {
+            self::set_notice( 'Security token expired. Please click "Check Latest Updates Now" again.', 'error' );
+            wp_safe_redirect( add_query_arg( 'xlocal_tab', 'logs', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
+            exit;
+        }
 
         if ( ! class_exists( 'Xlocal_Bridge_Updater' ) ) {
             self::set_notice( 'Updater class is not loaded.', 'error' );
@@ -1177,7 +1182,12 @@ class Xlocal_Bridge_Settings {
         if ( ! current_user_can( 'update_plugins' ) ) {
             wp_die( 'Unauthorized' );
         }
-        check_admin_referer( 'xlocal_update_plugin_now' );
+        $nonce = isset( $_REQUEST['_wpnonce'] ) ? sanitize_text_field( (string) $_REQUEST['_wpnonce'] ) : '';
+        if ( ! wp_verify_nonce( $nonce, 'xlocal_update_plugin_now' ) ) {
+            self::set_notice( 'Security token expired. Please open Logs tab and click "Update Plugin Now" again.', 'error' );
+            wp_safe_redirect( add_query_arg( 'xlocal_tab', 'logs', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
+            exit;
+        }
 
         if ( ! class_exists( 'Xlocal_Bridge_Updater' ) ) {
             self::set_notice( 'Updater class is not loaded.', 'error' );
@@ -1205,7 +1215,12 @@ class Xlocal_Bridge_Settings {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Unauthorized' );
         }
-        check_admin_referer( 'xlocal_clear_sender_debug_logs' );
+        $nonce = isset( $_REQUEST['_wpnonce'] ) ? sanitize_text_field( (string) $_REQUEST['_wpnonce'] ) : '';
+        if ( ! wp_verify_nonce( $nonce, 'xlocal_clear_sender_debug_logs' ) ) {
+            self::set_notice( 'Security token expired. Please retry from the Logs tab.', 'error' );
+            wp_safe_redirect( add_query_arg( 'xlocal_tab', 'logs', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
+            exit;
+        }
 
         $options = self::get_options();
         $options['sender_debug_log_history'] = '';
