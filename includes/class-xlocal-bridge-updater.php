@@ -266,7 +266,8 @@ class Xlocal_Bridge_Updater {
                 'version'      => self::current_version() . '.' . gmdate( 'YmdHis', $timestamp ),
                 'changelog'    => 'Latest commit from branch ' . self::branch() . ': ' . substr( $sha, 0, 12 ),
                 'homepage'     => isset( $json['html_url'] ) ? esc_url_raw( (string) $json['html_url'] ) : '',
-                'package'      => 'https://api.github.com/repos/' . $repo . '/zipball/' . rawurlencode( $sha ),
+                // Use codeload URL for WP upgrader compatibility.
+                'package'      => 'https://codeload.github.com/' . $repo . '/zip/' . rawurlencode( $sha ),
                 'published_at' => $published_at,
                 'commit'       => $sha,
             );
@@ -278,7 +279,8 @@ class Xlocal_Bridge_Updater {
                 'version'      => ltrim( sanitize_text_field( (string) $json['tag_name'] ), 'vV' ),
                 'changelog'    => isset( $json['body'] ) ? sanitize_textarea_field( (string) $json['body'] ) : '',
                 'homepage'     => isset( $json['html_url'] ) ? esc_url_raw( (string) $json['html_url'] ) : '',
-                'package'      => isset( $json['zipball_url'] ) ? esc_url_raw( (string) $json['zipball_url'] ) : '',
+                // Use codeload URL for WP upgrader compatibility.
+                'package'      => 'https://codeload.github.com/' . $repo . '/zip/refs/tags/' . rawurlencode( sanitize_text_field( (string) $json['tag_name'] ) ),
                 'published_at' => isset( $json['published_at'] ) ? sanitize_text_field( (string) $json['published_at'] ) : gmdate( 'c' ),
                 'commit'       => '',
             );
