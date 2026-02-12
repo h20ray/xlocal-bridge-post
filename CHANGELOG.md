@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 - Clear operator-focused Bulk Send notices for testing and production confidence.
 - Built-in GitHub updater integration for wp-admin update notices and one-click upgrades.
 - New settings status badge for updater configuration visibility.
+- Default updater source now points to official repo (`h20ray/xlocal-bridge-post`) without requiring `wp-config.php` edits.
 
 ### Changed
 - Sender retry flow now regenerates `X-Xlocal-Timestamp`, `X-Xlocal-Nonce`, and `X-Xlocal-Signature` on every retry attempt.

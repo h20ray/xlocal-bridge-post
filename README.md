@@ -311,11 +311,12 @@ Kalau kamu update konten lama di Sender:
 
 Plugin ini sudah punya custom updater bawaan untuk menampilkan update notice di wp-admin langsung dari GitHub.
 Default channel saat ini adalah **per-commit** (branch tracking).
+Secara default sudah terhubung ke repo resmi: `h20ray/xlocal-bridge-post` (tanpa edit `wp-config.php`).
 
-Tambahkan di `wp-config.php` pada site yang memakai plugin ini:
+Opsional override di `wp-config.php` kalau ingin fork/private repo:
 
 ```php
-define( 'XLOCAL_BRIDGE_GITHUB_REPO', 'OWNER/REPO' ); // contoh: jagawarta/xlocal-bridge-post
+define( 'XLOCAL_BRIDGE_GITHUB_REPO', 'OWNER/REPO' );
 define( 'XLOCAL_BRIDGE_GITHUB_BRANCH', 'main' ); // optional, default: main
 define( 'XLOCAL_BRIDGE_GITHUB_UPDATE_CHANNEL', 'commit' ); // commit (default) atau release
 // Optional untuk private repo atau rate limit tinggi:
@@ -332,4 +333,4 @@ Catatan:
 
 - Channel `commit` menggunakan commit terbaru dari branch.
 - Channel `release` menggunakan GitHub release stabil (non-draft, non-prerelease).
-- Jika konstanta repo tidak diisi, updater tidak aktif (plugin tetap berjalan normal).
+- Tanpa konfigurasi apa pun, updater tetap aktif ke repo resmi.

@@ -2,6 +2,8 @@
 /**
  * Plugin Name: xLocal Bridge Post
  * Description: Unified Sender + Receiver bridge for pushing finalized content with CDN-only media URLs.
+ * Plugin URI: https://github.com/h20ray/xlocal-bridge-post
+ * Update URI: https://github.com/h20ray/xlocal-bridge-post
  * Version: 0.5.1
  * Author: JagaWarta
  */

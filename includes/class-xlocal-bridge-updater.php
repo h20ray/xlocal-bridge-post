@@ -7,6 +7,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Xlocal_Bridge_Updater {
     const CACHE_TTL = 21600; // 6 hours.
     const INSTALLED_COMMIT_OPTION = 'xlocal_bridge_updater_installed_commit';
+    const DEFAULT_REPO = 'h20ray/xlocal-bridge-post';
+    const DEFAULT_BRANCH = 'main';
 
     public static function init() {
         add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'inject_update' ) );
@@ -268,7 +270,7 @@ class Xlocal_Bridge_Updater {
     }
 
     private static function repo() {
-        $repo = defined( 'XLOCAL_BRIDGE_GITHUB_REPO' ) ? trim( (string) XLOCAL_BRIDGE_GITHUB_REPO ) : '';
+        $repo = defined( 'XLOCAL_BRIDGE_GITHUB_REPO' ) ? trim( (string) XLOCAL_BRIDGE_GITHUB_REPO ) : self::DEFAULT_REPO;
         $repo = apply_filters( 'xlocal_bridge_github_repo', $repo );
         if ( preg_match( '#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $repo ) ) {
             return $repo;
@@ -289,9 +291,9 @@ class Xlocal_Bridge_Updater {
     }
 
     private static function branch() {
-        $branch = defined( 'XLOCAL_BRIDGE_GITHUB_BRANCH' ) ? trim( (string) XLOCAL_BRIDGE_GITHUB_BRANCH ) : 'main';
+        $branch = defined( 'XLOCAL_BRIDGE_GITHUB_BRANCH' ) ? trim( (string) XLOCAL_BRIDGE_GITHUB_BRANCH ) : self::DEFAULT_BRANCH;
         $branch = apply_filters( 'xlocal_bridge_github_branch', $branch );
         $branch = sanitize_text_field( $branch );
-        return $branch !== '' ? $branch : 'main';
+        return $branch !== '' ? $branch : self::DEFAULT_BRANCH;
     }
 }
