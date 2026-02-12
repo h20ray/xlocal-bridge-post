@@ -13,6 +13,7 @@ class Xlocal_Bridge_Settings {
         add_action( 'admin_enqueue_scripts', array( __CLASS__, 'enqueue_admin_assets' ) );
         add_action( 'admin_post_xlocal_sender_test', array( __CLASS__, 'handle_test_payload' ) );
         add_action( 'admin_post_xlocal_bulk_send_run', array( __CLASS__, 'handle_bulk_send' ) );
+        add_action( 'admin_post_update', array( __CLASS__, 'maybe_handle_bulk_send_from_update_route' ) );
         add_action( 'admin_post_xlocal_bulk_import_run', array( __CLASS__, 'handle_bulk_import' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
     }
@@ -541,14 +542,9 @@ class Xlocal_Bridge_Settings {
 
         // Use the main settings form but override action when running Bulk Send.
         $action_url = admin_url( 'admin-post.php?action=xlocal_bulk_send_run' );
-        submit_button(
-            'Run Bulk Send',
-            'secondary',
-            'xlocal_bulk_send_run',
-            false,
-            array(
-                'formaction' => esc_url( $action_url ),
-            )
+        printf(
+            '<button type="submit" name="action" value="xlocal_bulk_send_run" class="button button-secondary" formaction="%s">Run Bulk Send</button>',
+            esc_url( $action_url )
         );
 
         echo '</div>';
@@ -925,7 +921,9 @@ class Xlocal_Bridge_Settings {
             $valid_nonce = true;
         }
         if ( ! $valid_nonce ) {
-            wp_die( 'Invalid nonce' );
+            self::set_notice( 'Bulk Send security check failed (invalid nonce). Please refresh the settings page and try again.', 'error' );
+            wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
+            exit;
         }
 
         $options = self::get_options();
@@ -1077,6 +1075,23 @@ class Xlocal_Bridge_Settings {
     }
 
     public static function handle_bulk_import() {
+        self::handle_bulk_send();
+    }
+
+    public static function maybe_handle_bulk_send_from_update_route() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        $is_bulk_send = false;
+        if ( isset( $_POST['action'] ) && sanitize_key( (string) $_POST['action'] ) === 'xlocal_bulk_send_run' ) {
+            $is_bulk_send = true;
+        }
+        if ( isset( $_POST['xlocal_bulk_send_nonce'] ) || isset( $_POST['xlocal_bulk_import_nonce'] ) ) {
+            $is_bulk_send = true;
+        }
+        if ( ! $is_bulk_send ) {
+            return;
+        }
         self::handle_bulk_send();
     }
 
