@@ -12,6 +12,10 @@ class Xlocal_Bridge_Sender {
     const META_REMOTE_SOURCE = '_xlocal_source_url';
     private static $dispatch_guard = array();
 
+    public static function record_debug_payload_snapshot( $context, $post_id, $payload, $options, $endpoint = '' ) {
+        self::debug_payload_snapshot( $context, $post_id, $payload, $options, $endpoint );
+    }
+
     public static function init() {
         add_action( 'save_post', array( __CLASS__, 'maybe_dispatch_post' ), 20, 3 );
         add_action( self::CRON_HOOK, array( __CLASS__, 'process_batch_queue' ) );
@@ -147,6 +151,7 @@ class Xlocal_Bridge_Sender {
                 self::store_last_result( 'Dry run: payload prepared for post ' . $post_id );
                 update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
                 self::debug_log( 'Dry run prepared for post ' . $post_id, $options );
+                self::debug_payload_snapshot( 'auto_dry_run', $post_id, $payload, $options );
                 return;
             }
 
@@ -157,7 +162,7 @@ class Xlocal_Bridge_Sender {
                 return;
             }
 
-            self::send_single_post( $post_id, $payload, $payload_hash, $options );
+            self::send_single_post( $post_id, $payload, $payload_hash, $options, 'auto' );
         } finally {
             unset( self::$dispatch_guard[ $guard_key ] );
         }
@@ -201,7 +206,7 @@ class Xlocal_Bridge_Sender {
             }
 
             $payload_hash = hash( 'sha256', wp_json_encode( $payload ) );
-            $sent = self::send_single_post( $post_id, $payload, $payload_hash, $options );
+            $sent = self::send_single_post( $post_id, $payload, $payload_hash, $options, 'batch' );
             if ( ! $sent ) {
                 $remaining[] = $item;
             }
@@ -333,17 +338,18 @@ class Xlocal_Bridge_Sender {
             self::store_last_result( 'Dry run (bulk): payload prepared for post ' . $post_id );
             update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
             self::debug_log( 'Bulk dry run prepared for post ' . $post_id, $options );
+            self::debug_payload_snapshot( 'bulk_dry_run', $post_id, $payload, $options );
             return 'sent';
         }
 
-        $sent = self::send_single_post( $post_id, $payload, $payload_hash, $options );
+        $sent = self::send_single_post( $post_id, $payload, $payload_hash, $options, 'bulk' );
         if ( $sent ) {
             self::debug_log( 'Bulk send success for post ' . $post_id, $options );
         }
         return $sent ? 'sent' : 'error';
     }
 
-    private static function send_single_post( $post_id, $payload, $payload_hash, $options ) {
+    private static function send_single_post( $post_id, $payload, $payload_hash, $options, $context = 'manual' ) {
         $endpoint = rtrim( $options['sender_main_base_url'], '/' ) . $options['sender_ingest_path'];
         $secret = Xlocal_Bridge_Settings::get_sender_secret();
         if ( empty( $secret ) || empty( $endpoint ) ) {
@@ -351,6 +357,7 @@ class Xlocal_Bridge_Sender {
             return false;
         }
 
+        self::debug_payload_snapshot( $context, $post_id, $payload, $options, $endpoint );
         $result = self::send_payload( $endpoint, $secret, $payload, $options );
         if ( is_wp_error( $result ) ) {
             self::debug_log( 'Send failed for post ' . $post_id . ': ' . $result->get_error_message(), $options );
@@ -684,11 +691,74 @@ class Xlocal_Bridge_Sender {
             return;
         }
         $prefix = gmdate( 'Y-m-d H:i:s' ) . ' UTC - ';
-        $existing = isset( $options['sender_debug_log_history'] ) ? (string) $options['sender_debug_log_history'] : '';
+        $stored = Xlocal_Bridge_Settings::get_options();
+        $existing = isset( $stored['sender_debug_log_history'] ) ? (string) $stored['sender_debug_log_history'] : '';
         $lines = array_filter( explode( "\n", $existing ) );
         $lines[] = $prefix . sanitize_text_field( $message );
         $lines = array_slice( $lines, -200 );
-        $options['sender_debug_log_history'] = implode( "\n", $lines );
-        update_option( Xlocal_Bridge_Settings::OPTION_KEY, $options );
+        $stored['sender_debug_log_history'] = implode( "\n", $lines );
+        update_option( Xlocal_Bridge_Settings::OPTION_KEY, $stored );
+    }
+
+    private static function debug_payload_snapshot( $context, $post_id, $payload, $options, $endpoint = '' ) {
+        if ( empty( $options['sender_debug_logs'] ) || ! is_array( $payload ) ) {
+            return;
+        }
+
+        $content_html = isset( $payload['content_html'] ) ? (string) $payload['content_html'] : '';
+        $content_len = strlen( $content_html );
+        if ( $content_len > 12000 ) {
+            $payload['content_html'] = substr( $content_html, 0, 12000 ) . "\n<!-- xlocal:content_truncated -->";
+        }
+
+        if ( ! empty( $payload['author']['email'] ) ) {
+            $payload['author']['email'] = self::mask_email( (string) $payload['author']['email'] );
+        }
+
+        if ( ! empty( $payload['media_manifest'] ) && is_array( $payload['media_manifest'] ) ) {
+            $max_manifest = 80;
+            $total_manifest = count( $payload['media_manifest'] );
+            if ( $total_manifest > $max_manifest ) {
+                $payload['media_manifest'] = array_slice( $payload['media_manifest'], 0, $max_manifest );
+                $payload['_xlocal_media_manifest_truncated'] = $total_manifest - $max_manifest;
+            }
+        }
+
+        $entry = array(
+            'timestamp_utc' => gmdate( 'Y-m-d H:i:s' ),
+            'context' => sanitize_key( (string) $context ),
+            'post_id' => intval( $post_id ),
+            'endpoint' => esc_url_raw( (string) $endpoint ),
+            'payload_size_bytes' => strlen( wp_json_encode( $payload ) ),
+            'content_original_bytes' => $content_len,
+            'payload' => $payload,
+        );
+
+        $line = wp_json_encode( $entry );
+        if ( ! is_string( $line ) || $line === '' ) {
+            return;
+        }
+
+        $stored = Xlocal_Bridge_Settings::get_options();
+        $existing = isset( $stored['sender_debug_payload_history'] ) ? (string) $stored['sender_debug_payload_history'] : '';
+        $lines = array_filter( explode( "\n", $existing ) );
+        $lines[] = $line;
+        $lines = array_slice( $lines, -30 );
+        $stored['sender_debug_payload_history'] = implode( "\n", $lines );
+        update_option( Xlocal_Bridge_Settings::OPTION_KEY, $stored );
+    }
+
+    private static function mask_email( $email ) {
+        $email = trim( strtolower( (string) $email ) );
+        if ( $email === '' || strpos( $email, '@' ) === false ) {
+            return '';
+        }
+        list( $local, $domain ) = explode( '@', $email, 2 );
+        if ( strlen( $local ) <= 2 ) {
+            $local = substr( $local, 0, 1 ) . '*';
+        } else {
+            $local = substr( $local, 0, 2 ) . str_repeat( '*', max( 1, strlen( $local ) - 2 ) );
+        }
+        return $local . '@' . $domain;
     }
 }
