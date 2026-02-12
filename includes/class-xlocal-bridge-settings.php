@@ -454,7 +454,29 @@ class Xlocal_Bridge_Settings {
         printf( '<textarea readonly rows="6">%s</textarea>', esc_textarea( $last_push_result ) );
         echo '</td></tr>';
         echo '<tr><th scope="row">Sender Debug Log</th><td>';
-        printf( '<textarea readonly rows="12">%s</textarea>', esc_textarea( $sender_debug_log_history ) );
+        $lines = array_filter( explode( "\n", (string) $sender_debug_log_history ) );
+        if ( empty( $lines ) ) {
+            echo '<p>No sender debug entries yet.</p>';
+        } else {
+            $lines = array_reverse( $lines );
+            echo '<table class="widefat striped" style="max-height:24rem;overflow:auto;display:block;">';
+            echo '<thead><tr><th style="width:14rem;">Timestamp</th><th>Message</th></tr></thead><tbody>';
+            foreach ( $lines as $line ) {
+                $line = (string) $line;
+                $timestamp = '';
+                $message = $line;
+                $parts = explode( ' UTC - ', $line, 2 );
+                if ( count( $parts ) === 2 ) {
+                    $timestamp = $parts[0] . ' UTC';
+                    $message = $parts[1];
+                }
+                echo '<tr>';
+                echo '<td><code>' . esc_html( $timestamp ) . '</code></td>';
+                echo '<td>' . esc_html( $message ) . '</td>';
+                echo '</tr>';
+            }
+            echo '</tbody></table>';
+        }
         $clear_debug_logs_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_clear_sender_debug_logs' ), 'xlocal_clear_sender_debug_logs' );
         echo '<p><a href="' . esc_url( $clear_debug_logs_url ) . '" class="button button-secondary">Clear Sender Debug Log</a></p>';
         echo '<p class="xlocal-field-hint">Enable "Sender Debug Logs" in Advanced tab to collect timestamped sender transport/debug entries.</p>';
