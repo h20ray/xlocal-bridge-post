@@ -23,7 +23,7 @@ The focus is:
 - **Clean CDN-only media**: receiver can strictly enforce allowed image domains.
 - **Author & taxonomy mapping**: flexible but safe mapping for authors, categories, and tags.
 - **No duplicates**: receiver deduplicates by source URL/hash and ingest ID.
-- **Bulk Import**: backfill older posts from sender without creating double posts.
+- **Bulk Send**: backfill older posts from sender without creating double posts.
 
 ---
 
@@ -222,21 +222,22 @@ Di Receiver:
 
 ---
 
-## 8. Bulk Import (backfill older posts)
+## 8. Bulk Send (backfill older posts)
 
 Kadang kamu baru install plugin ini setelah sudah punya banyak konten di Sender.  
-Bulk Import membantu **mengirim post lama** tanpa menulis script manual, dan tetap aman dari duplikasi.
+Bulk Send membantu **mengirim post lama** tanpa menulis script manual, dan tetap aman dari duplikasi.
 
 ### Where to find it
 
 On the **Sender** site:
 
-- Go to **Settings → xLocal Bridge Post → Bulk Import**.
+- Go to **Settings → xLocal Bridge Post → Bulk Send**.
 - Tab ini hanya aktif kalau Mode = `Sender` atau `Both`.
 
-### What Bulk Import does
+### What Bulk Send does
 
 - Menjalankan query post di Sender sesuai filter yang kamu pilih.
+- Memproses post secara deterministik: **oldest unsent first**.
 - Untuk setiap post:
   - Membuat payload sama persis seperti auto-send biasa.
   - Memanggil jalur kirim yang sama (HMAC, endpoint, dll).
@@ -244,9 +245,9 @@ On the **Sender** site:
 - Di Receiver:
   - Dedup dan update tetap di-handle oleh logic yang sama (`upsert_post`).
 
-### Bulk Import filters
+### Bulk Send filters
 
-Di tab Bulk Import kamu bisa atur:
+Di tab Bulk Send kamu bisa atur:
 
 - **Bulk Post Type**:
   - Post type yang akan diproses (default: `sender_target_post_type`).
@@ -256,8 +257,9 @@ Di tab Bulk Import kamu bisa atur:
   - Opsional; untuk membatasi hanya post setelah tanggal tertentu.
 - **Batch Size**:
   - Berapa banyak post yang diproses tiap run (default 25, maksimal 200).
+  - Untuk testing aman: set `1` supaya bisa verifikasi per-item.
 
-Kamu bisa menjalankan Bulk Import berkali-kali:
+Kamu bisa menjalankan Bulk Send berkali-kali:
 
 - Post yang belum pernah dikirim → akan dikirim.
 - Post dengan payload yang sama seperti terakhir → akan di-skip.
@@ -270,14 +272,14 @@ Kamu bisa menjalankan Bulk Import berkali-kali:
 Untuk migrasi awal banyak konten:
 
 1. Set up Sender & Receiver dengan status default `pending` di Receiver.
-2. Di Sender, buka tab **Bulk Import**:
+2. Di Sender, buka tab **Bulk Send**:
    - Post type: `post`.
    - Status: `publish`.
    - Date filter: isi tanggal beberapa bulan terakhir dulu (jangan semua sekaligus).
    - Batch size: mulai dari 20–50.
-3. Jalankan Bulk Import.
+3. Jalankan Bulk Send.
 4. Review konten di Receiver (kategori, author, media).
-5. Ulangi Bulk Import dengan range tanggal lebih lama sampai semua konten yang diinginkan terkirim.
+5. Ulangi Bulk Send dengan range tanggal lebih lama sampai semua konten yang diinginkan terkirim.
 
 Kalau kamu update konten lama di Sender:
 
@@ -299,6 +301,35 @@ Kalau kamu update konten lama di Sender:
 
 ## 11. Versioning
 
-- Plugin header version: `0.5.0`
-- Admin assets (`admin.css`, `admin.js`) juga memakai `0.5.0` untuk cache-busting.
+- Current plugin version: `0.5.1`
+- Admin assets (`admin.css`, `admin.js`) juga memakai `0.5.1` untuk cache-busting.
+- Release notes tersedia di `CHANGELOG.md`.
 
+---
+
+## 12. GitHub Auto Update (wp-admin)
+
+Plugin ini sudah punya custom updater bawaan untuk menampilkan update notice di wp-admin langsung dari GitHub.
+Default channel saat ini adalah **per-commit** (branch tracking).
+
+Tambahkan di `wp-config.php` pada site yang memakai plugin ini:
+
+```php
+define( 'XLOCAL_BRIDGE_GITHUB_REPO', 'OWNER/REPO' ); // contoh: jagawarta/xlocal-bridge-post
+define( 'XLOCAL_BRIDGE_GITHUB_BRANCH', 'main' ); // optional, default: main
+define( 'XLOCAL_BRIDGE_GITHUB_UPDATE_CHANNEL', 'commit' ); // commit (default) atau release
+// Optional untuk private repo atau rate limit tinggi:
+// define( 'XLOCAL_BRIDGE_GITHUB_TOKEN', 'ghp_xxx' );
+```
+
+Agar update terdeteksi:
+
+1. Push commit terbaru ke branch yang dipantau (default `main`).
+2. Di wp-admin, buka halaman Plugins lalu cek update.
+3. Jalankan update sekali klik dari wp-admin.
+
+Catatan:
+
+- Channel `commit` menggunakan commit terbaru dari branch.
+- Channel `release` menggunakan GitHub release stabil (non-draft, non-prerelease).
+- Jika konstanta repo tidak diisi, updater tidak aktif (plugin tetap berjalan normal).

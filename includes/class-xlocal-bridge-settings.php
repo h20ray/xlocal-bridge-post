@@ -12,6 +12,7 @@ class Xlocal_Bridge_Settings {
         add_action( 'admin_init', array( __CLASS__, 'register_settings' ) );
         add_action( 'admin_enqueue_scripts', array( __CLASS__, 'enqueue_admin_assets' ) );
         add_action( 'admin_post_xlocal_sender_test', array( __CLASS__, 'handle_test_payload' ) );
+        add_action( 'admin_post_xlocal_bulk_send_run', array( __CLASS__, 'handle_bulk_send' ) );
         add_action( 'admin_post_xlocal_bulk_import_run', array( __CLASS__, 'handle_bulk_import' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
     }
@@ -200,8 +201,9 @@ class Xlocal_Bridge_Settings {
         }
         $base_url = plugin_dir_url( __FILE__ );
         $base_url = str_replace( '/includes', '', $base_url );
-        wp_enqueue_style( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.css', array(), '0.5.0' );
-        wp_enqueue_script( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.js', array(), '0.5.0', true );
+        $asset_version = defined( 'XLOCAL_BRIDGE_POST_VERSION' ) ? XLOCAL_BRIDGE_POST_VERSION : '0.5.1';
+        wp_enqueue_style( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.css', array(), $asset_version );
+        wp_enqueue_script( 'xlocal-bridge-post-admin', $base_url . 'admin/admin.js', array(), $asset_version, true );
     }
 
     public static function render_settings_page() {
@@ -232,9 +234,9 @@ class Xlocal_Bridge_Settings {
                 'label' => 'Logs',
                 'desc' => 'Diagnostics and last push result.',
             ),
-            'bulk_import' => array(
-                'label' => 'Bulk Import',
-                'desc' => 'Backfill older posts from sender safely.',
+            'bulk_send' => array(
+                'label' => 'Bulk Send',
+                'desc' => 'Backfill old posts with deterministic, test-friendly sending.',
             ),
             'documentation' => array(
                 'label' => 'Documentation',
@@ -270,7 +272,7 @@ class Xlocal_Bridge_Settings {
         self::render_sender_tab();
         self::render_advanced_tab();
         self::render_logs_tab( $options['sender_last_push_result'] );
-        self::render_bulk_import_tab( $options );
+        self::render_bulk_send_tab( $options );
         self::render_documentation_tab();
 
         submit_button();
@@ -434,17 +436,17 @@ class Xlocal_Bridge_Settings {
         echo '</div>';
     }
 
-    private static function render_bulk_import_tab( $options ) {
-        echo '<div class="xlocal-tab-panel" data-tab-panel="bulk_import" id="xlocal-panel-bulk_import" role="tabpanel" aria-labelledby="xlocal-tab-bulk_import">';
+    private static function render_bulk_send_tab( $options ) {
+        echo '<div class="xlocal-tab-panel" data-tab-panel="bulk_send" id="xlocal-panel-bulk_send" role="tabpanel" aria-labelledby="xlocal-tab-bulk_send">';
         echo '<div class="xlocal-section-header">';
-        echo '<h2>Bulk Import</h2>';
-        echo '<p>Safely backfill older posts from this sender site to your main site without creating duplicates.</p>';
+        echo '<h2>Bulk Send</h2>';
+        echo '<p>Premium backfill flow for safely sending older posts from this sender site to your main site.</p>';
         echo '</div>';
 
         $mode = isset( $options['mode'] ) ? $options['mode'] : 'both';
 
         if ( $mode === 'receiver' ) {
-            echo '<p><strong>Bulk Import only runs on Sender sites.</strong> Set this site to Sender or Both in the Overview tab to enable.</p>';
+            echo '<p><strong>Bulk Send only runs on Sender sites.</strong> Set this site to Sender or Both in the Overview tab to enable.</p>';
             echo '</div>';
             return;
         }
@@ -463,10 +465,10 @@ class Xlocal_Bridge_Settings {
             $bulk_batch_size = 25;
         }
 
-        echo '<p class="xlocal-note"><strong>Note:</strong> Bulk Import will not create duplicate posts on the main site. It respects existing dedup and update rules on the receiver.</p>';
+        echo '<p class="xlocal-note"><strong>Confidence:</strong> Bulk Send runs oldest-first and only selects unsent posts, so each run advances deterministically. This makes it ideal for testing with batch size <code>1</code>.</p>';
 
-        // Nonce stays inside main options form so Bulk Import can post to admin-post safely.
-        wp_nonce_field( 'xlocal_bulk_import', 'xlocal_bulk_import_nonce' );
+        // Nonce stays inside main options form so Bulk Send can post to admin-post safely.
+        wp_nonce_field( 'xlocal_bulk_send', 'xlocal_bulk_send_nonce' );
         echo '<table class="form-table" role="presentation">';
 
         echo '<tr>';
@@ -474,7 +476,7 @@ class Xlocal_Bridge_Settings {
         echo '<td>';
         echo '<p>Post type: <code>' . esc_html( $options['sender_target_post_type'] ) . '</code></p>';
         echo '<p>Status to send: <code>' . esc_html( $options['sender_default_status'] ) . '</code></p>';
-        echo '<p class="xlocal-field-hint">These are your normal sender settings. Bulk Import can filter within them.</p>';
+        echo '<p class="xlocal-field-hint">These are your normal sender settings. Bulk Send filters and sends based on your selection below.</p>';
         echo '</td><td class="xlocal-help-cell"></td>';
         echo '</tr>';
 
@@ -488,7 +490,7 @@ class Xlocal_Bridge_Settings {
         );
         echo '<p class="xlocal-field-hint">Usually keep this the same as Sender Target Post Type.</p>';
         echo '</td>';
-        echo '<td class="xlocal-help-cell"><span class="xlocal-help"><span class="xlocal-help-icon">i</span><span class="xlocal-help-text">Only posts of this type will be considered for Bulk Import.</span></span></td>';
+        echo '<td class="xlocal-help-cell"><span class="xlocal-help"><span class="xlocal-help-icon">i</span><span class="xlocal-help-text">Only posts of this type are selected and sent in this run.</span></span></td>';
         echo '</tr>';
 
         echo '<tr>';
@@ -517,7 +519,7 @@ class Xlocal_Bridge_Settings {
             esc_attr( self::OPTION_KEY ),
             esc_attr( $bulk_date_after )
         );
-        echo '<p class="xlocal-field-hint">Optional: limit Bulk Import to posts newer than this date.</p>';
+        echo '<p class="xlocal-field-hint">Optional: limit Bulk Send to posts newer than this date.</p>';
         echo '</td>';
         echo '<td class="xlocal-help-cell"><span class="xlocal-help"><span class="xlocal-help-icon">i</span><span class="xlocal-help-text">Leave empty to include all matching posts, or set a cut-off date for safer rollout.</span></span></td>';
         echo '</tr>';
@@ -530,19 +532,19 @@ class Xlocal_Bridge_Settings {
             esc_attr( self::OPTION_KEY ),
             esc_attr( $bulk_batch_size )
         );
-        echo '<p class="xlocal-field-hint">How many posts to process in one Bulk Import run. Use smaller numbers on slower hosting.</p>';
+        echo '<p class="xlocal-field-hint">How many posts to process in one Bulk Send run. For testing, start with <code>1</code>.</p>';
         echo '</td>';
-        echo '<td class="xlocal-help-cell"><span class="xlocal-help"><span class="xlocal-help-icon">i</span><span class="xlocal-help-text">You can run Bulk Import multiple times; it will skip identical payloads that were already sent.</span></span></td>';
+        echo '<td class="xlocal-help-cell"><span class="xlocal-help"><span class="xlocal-help-icon">i</span><span class="xlocal-help-text">Re-run as needed. Each run picks the next oldest unsent posts that match the filters.</span></span></td>';
         echo '</tr>';
 
         echo '</table>';
 
-        // Use the main settings form but override action when running Bulk Import.
-        $action_url = admin_url( 'admin-post.php?action=xlocal_bulk_import_run' );
+        // Use the main settings form but override action when running Bulk Send.
+        $action_url = admin_url( 'admin-post.php?action=xlocal_bulk_send_run' );
         submit_button(
-            'Run Bulk Import',
+            'Run Bulk Send',
             'secondary',
-            'xlocal_bulk_import_run',
+            'xlocal_bulk_send_run',
             false,
             array(
                 'formaction' => esc_url( $action_url ),
@@ -850,6 +852,14 @@ class Xlocal_Bridge_Settings {
         $badges = array();
         $mode = $options['mode'];
         $badges[] = array( 'label' => 'Mode: ' . ucfirst( $mode ), 'state' => 'ok' );
+        if ( class_exists( 'Xlocal_Bridge_Updater' ) ) {
+            $updater_ok = Xlocal_Bridge_Updater::is_repo_configured();
+            $updater_channel = Xlocal_Bridge_Updater::channel_label();
+            $badges[] = array(
+                'label' => $updater_ok ? 'Updater: Configured (' . $updater_channel . ')' : 'Updater: GitHub Repo Missing',
+                'state' => $updater_ok ? 'ok' : 'warn',
+            );
+        }
 
         if ( in_array( $mode, array( 'receiver', 'both' ), true ) ) {
             $badges[] = array( 'label' => $options['receiver_enabled'] ? 'Receiver Enabled' : 'Receiver Disabled', 'state' => $options['receiver_enabled'] ? 'ok' : 'warn' );
@@ -902,18 +912,26 @@ class Xlocal_Bridge_Settings {
         exit;
     }
 
-    public static function handle_bulk_import() {
+    public static function handle_bulk_send() {
         if ( ! current_user_can( 'manage_options' ) ) {
             wp_die( 'Unauthorized' );
         }
-        if ( ! isset( $_POST['xlocal_bulk_import_nonce'] ) || ! wp_verify_nonce( $_POST['xlocal_bulk_import_nonce'], 'xlocal_bulk_import' ) ) {
+        $valid_nonce = false;
+        if ( isset( $_POST['xlocal_bulk_send_nonce'] ) && wp_verify_nonce( $_POST['xlocal_bulk_send_nonce'], 'xlocal_bulk_send' ) ) {
+            $valid_nonce = true;
+        }
+        // Backward compatibility for older button/action payloads.
+        if ( isset( $_POST['xlocal_bulk_import_nonce'] ) && wp_verify_nonce( $_POST['xlocal_bulk_import_nonce'], 'xlocal_bulk_import' ) ) {
+            $valid_nonce = true;
+        }
+        if ( ! $valid_nonce ) {
             wp_die( 'Invalid nonce' );
         }
 
         $options = self::get_options();
 
         if ( $options['mode'] === 'receiver' ) {
-            self::set_notice( 'Bulk Import is only available on Sender sites.', 'error' );
+            self::set_notice( 'Bulk Send is only available on Sender sites.', 'error' );
             wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
             exit;
         }
@@ -921,7 +939,7 @@ class Xlocal_Bridge_Settings {
         $endpoint = rtrim( $options['sender_main_base_url'], '/' ) . $options['sender_ingest_path'];
         $secret   = self::get_sender_secret();
         if ( ! wp_http_validate_url( $endpoint ) || empty( $secret ) ) {
-            self::set_notice( 'Bulk Import requires a valid sender endpoint and secret.', 'error' );
+            self::set_notice( 'Bulk Send requires a valid sender endpoint and secret.', 'error' );
             wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
             exit;
         }
@@ -955,12 +973,14 @@ class Xlocal_Bridge_Settings {
             'post_type'      => $bulk_post_type,
             'post_status'    => $bulk_status,
             'posts_per_page' => $bulk_batch_size,
-            'orderby'        => 'date',
-            'order'          => 'ASC',
+            'orderby'        => array(
+                'date' => 'ASC',
+                'ID'   => 'ASC',
+            ),
             'fields'         => 'ids',
             'no_found_rows'  => true,
             'meta_query'     => array(
-                'relation' => 'OR',
+                'relation' => 'AND',
                 array(
                     'key'     => Xlocal_Bridge_Sender::META_REMOTE_INGEST,
                     'compare' => 'NOT EXISTS',
@@ -968,6 +988,18 @@ class Xlocal_Bridge_Settings {
                 array(
                     'key'     => Xlocal_Bridge_Sender::META_REMOTE_SOURCE,
                     'compare' => 'NOT EXISTS',
+                ),
+                array(
+                    'relation' => 'OR',
+                    array(
+                        'key'     => Xlocal_Bridge_Sender::META_SENT_HASH,
+                        'compare' => 'NOT EXISTS',
+                    ),
+                    array(
+                        'key'     => Xlocal_Bridge_Sender::META_SENT_HASH,
+                        'value'   => '',
+                        'compare' => '=',
+                    ),
                 ),
             ),
         );
@@ -987,6 +1019,7 @@ class Xlocal_Bridge_Settings {
         $sent             = 0;
         $skipped_same     = 0;
         $skipped_remote   = 0;
+        $skipped_post_type = 0;
         $skipped_status   = 0;
         $errors           = 0;
 
@@ -999,7 +1032,7 @@ class Xlocal_Bridge_Settings {
 
                 $processed++;
 
-                $result = Xlocal_Bridge_Sender::bulk_send_post( $post, $options, $bulk_status );
+                $result = Xlocal_Bridge_Sender::bulk_send_post( $post, $options, $bulk_status, $bulk_post_type );
                 switch ( $result ) {
                     case 'sent':
                         $sent++;
@@ -1009,6 +1042,9 @@ class Xlocal_Bridge_Settings {
                         break;
                     case 'skipped_remote':
                         $skipped_remote++;
+                        break;
+                    case 'skipped_post_type':
+                        $skipped_post_type++;
                         break;
                     case 'skipped_status':
                         $skipped_status++;
@@ -1021,14 +1057,15 @@ class Xlocal_Bridge_Settings {
         }
 
         if ( $processed === 0 ) {
-            self::set_notice( 'Bulk Import: no matching posts found for the selected filters.', 'success' );
+            self::set_notice( 'Bulk Send found no eligible unsent posts for the selected filters. Tip: set Batch Size to 1 for controlled testing.', 'success' );
         } else {
             $message = sprintf(
-                'Bulk Import processed %d posts. Sent: %d, Skipped same content: %d, Skipped remote-sourced: %d, Skipped wrong status/type: %d, Errors: %d.',
+                'Bulk Send processed %d posts. Sent: %d, Skipped same content: %d, Skipped remote-sourced: %d, Skipped wrong post type: %d, Skipped wrong status: %d, Errors: %d. Runs are deterministic: oldest unsent posts are selected first.',
                 $processed,
                 $sent,
                 $skipped_same,
                 $skipped_remote,
+                $skipped_post_type,
                 $skipped_status,
                 $errors
             );
@@ -1037,6 +1074,10 @@ class Xlocal_Bridge_Settings {
 
         wp_safe_redirect( admin_url( 'options-general.php?page=xlocal-bridge-post' ) );
         exit;
+    }
+
+    public static function handle_bulk_import() {
+        self::handle_bulk_send();
     }
 
     private static function set_notice( $message, $type ) {

@@ -10,6 +10,7 @@ class Xlocal_Bridge_Sender {
     const META_SENT_HASH = '_xlocal_sender_last_hash';
     const META_REMOTE_INGEST = '_xlocal_ingest_id';
     const META_REMOTE_SOURCE = '_xlocal_source_url';
+    private static $dispatch_guard = array();
 
     public static function init() {
         add_action( 'save_post', array( __CLASS__, 'maybe_dispatch_post' ), 20, 3 );
@@ -37,9 +38,6 @@ class Xlocal_Bridge_Sender {
             return new WP_Error( 'xlocal_payload_too_large', 'Payload exceeds sender limit.' );
         }
 
-        $timestamp = time();
-        $nonce = wp_generate_password( 24, false, false );
-        $signature = hash_hmac( 'sha256', $timestamp . "\n" . $nonce . "\n" . $body, $secret );
         $origin_host = wp_parse_url( home_url(), PHP_URL_HOST );
 
         $args = array(
@@ -47,9 +45,6 @@ class Xlocal_Bridge_Sender {
             'timeout' => max( 3, intval( $options['sender_timeout'] ) ),
             'headers' => array(
                 'Content-Type' => 'application/json',
-                'X-Xlocal-Timestamp' => $timestamp,
-                'X-Xlocal-Nonce' => $nonce,
-                'X-Xlocal-Signature' => $signature,
                 'X-Xlocal-Origin-Host' => sanitize_text_field( (string) $origin_host ),
             ),
             'body' => $body,
@@ -63,6 +58,13 @@ class Xlocal_Bridge_Sender {
 
         while ( $attempt <= $max_retries ) {
             $attempt++;
+            $timestamp = time();
+            $nonce = wp_generate_password( 24, false, false );
+            $signature = hash_hmac( 'sha256', $timestamp . "\n" . $nonce . "\n" . $body, $secret );
+            $args['headers']['X-Xlocal-Timestamp'] = $timestamp;
+            $args['headers']['X-Xlocal-Nonce'] = $nonce;
+            $args['headers']['X-Xlocal-Signature'] = $signature;
+
             $response = wp_remote_post( $endpoint, $args );
             if ( is_wp_error( $response ) ) {
                 $last_error = $response;
@@ -107,49 +109,56 @@ class Xlocal_Bridge_Sender {
         if ( wp_is_post_autosave( $post_id ) || wp_is_post_revision( $post_id ) ) {
             return;
         }
-        if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
-            return;
-        }
 
-        $options = Xlocal_Bridge_Settings::get_options();
-        if ( ! self::is_sender_active( $options ) || empty( $options['sender_auto_send'] ) ) {
+        $guard_key = intval( $post_id ) . ':' . (string) $post->post_modified_gmt;
+        if ( isset( self::$dispatch_guard[ $guard_key ] ) ) {
             return;
         }
-        if ( $post->post_type !== $options['sender_target_post_type'] ) {
-            return;
-        }
-        if ( $post->post_status !== 'publish' ) {
-            return;
-        }
-        if ( ! empty( get_post_meta( $post_id, self::META_REMOTE_INGEST, true ) ) || ! empty( get_post_meta( $post_id, self::META_REMOTE_SOURCE, true ) ) ) {
-            return;
-        }
+        self::$dispatch_guard[ $guard_key ] = true;
 
-        $payload = self::build_payload_from_post( $post, $options );
-        if ( is_wp_error( $payload ) ) {
-            self::store_last_result( $payload->get_error_message() );
-            return;
-        }
+        try {
+            $options = Xlocal_Bridge_Settings::get_options();
+            if ( ! self::is_sender_active( $options ) || empty( $options['sender_auto_send'] ) ) {
+                return;
+            }
+            if ( $post->post_type !== $options['sender_target_post_type'] ) {
+                return;
+            }
+            if ( $post->post_status !== 'publish' ) {
+                return;
+            }
+            if ( ! empty( get_post_meta( $post_id, self::META_REMOTE_INGEST, true ) ) || ! empty( get_post_meta( $post_id, self::META_REMOTE_SOURCE, true ) ) ) {
+                return;
+            }
 
-        $payload_hash = hash( 'sha256', wp_json_encode( $payload ) );
-        $last_hash = (string) get_post_meta( $post_id, self::META_SENT_HASH, true );
-        if ( $update && $last_hash !== '' && hash_equals( $last_hash, $payload_hash ) ) {
-            return;
-        }
+            $payload = self::build_payload_from_post( $post, $options );
+            if ( is_wp_error( $payload ) ) {
+                self::store_last_result( $payload->get_error_message() );
+                return;
+            }
 
-        if ( ! empty( $options['sender_dry_run'] ) ) {
-            self::store_last_result( 'Dry run: payload prepared for post ' . $post_id );
-            update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
-            return;
-        }
+            $payload_hash = hash( 'sha256', wp_json_encode( $payload ) );
+            $last_hash = (string) get_post_meta( $post_id, self::META_SENT_HASH, true );
+            if ( $update && $last_hash !== '' && hash_equals( $last_hash, $payload_hash ) ) {
+                return;
+            }
 
-        if ( $options['sender_sync_mode'] === 'batch' ) {
-            self::queue_post( $post_id, $payload_hash );
-            self::store_last_result( 'Queued post ' . $post_id . ' for batch send.' );
-            return;
-        }
+            if ( ! empty( $options['sender_dry_run'] ) ) {
+                self::store_last_result( 'Dry run: payload prepared for post ' . $post_id );
+                update_post_meta( $post_id, self::META_SENT_HASH, $payload_hash );
+                return;
+            }
 
-        self::send_single_post( $post_id, $payload, $payload_hash, $options );
+            if ( $options['sender_sync_mode'] === 'batch' ) {
+                self::queue_post( $post_id, $payload_hash );
+                self::store_last_result( 'Queued post ' . $post_id . ' for batch send.' );
+                return;
+            }
+
+            self::send_single_post( $post_id, $payload, $payload_hash, $options );
+        } finally {
+            unset( self::$dispatch_guard[ $guard_key ] );
+        }
     }
 
     public static function process_batch_queue() {
@@ -265,15 +274,15 @@ class Xlocal_Bridge_Sender {
     /**
      * Explicit bulk send for a single post.
      *
-     * This is used by the Bulk Import admin tool and intentionally ignores
-     * sender_auto_send and REST_REQUEST guards, but still enforces:
+     * This is used by the Bulk Send admin tool and intentionally ignores
+     * sender_auto_send and save_post dispatch guards, but still enforces:
      * - correct post type
      * - correct status (publish by default)
      * - not a remote-ingested post
      *
-     * Returns one of: sent, skipped_same_hash, skipped_remote, skipped_status, error.
+     * Returns one of: sent, skipped_same_hash, skipped_remote, skipped_post_type, skipped_status, error.
      */
-    public static function bulk_send_post( WP_Post $post, $options = null, $required_status = 'publish' ) {
+    public static function bulk_send_post( WP_Post $post, $options = null, $required_status = 'publish', $required_post_type = '' ) {
         $post_id = intval( $post->ID );
 
         if ( ! $options ) {
@@ -284,8 +293,12 @@ class Xlocal_Bridge_Sender {
             return 'error';
         }
 
-        if ( $post->post_type !== $options['sender_target_post_type'] ) {
-            return 'skipped_status';
+        if ( $required_post_type === '' ) {
+            $required_post_type = $options['sender_target_post_type'];
+        }
+
+        if ( $post->post_type !== $required_post_type ) {
+            return 'skipped_post_type';
         }
 
         if ( $required_status && $post->post_status !== $required_status ) {
