@@ -132,10 +132,22 @@ class Xlocal_Bridge_Updater {
         return self::channel() === 'commit' ? 'Commit' : 'Release';
     }
 
+    public static function plugin_file() {
+        return self::plugin_basename();
+    }
+
     public static function status_snapshot() {
         $cached = get_site_transient( self::cache_key() );
         if ( ! is_array( $cached ) ) {
             $cached = array();
+        }
+        $update_plugins = get_site_transient( 'update_plugins' );
+        $plugin_file = self::plugin_basename();
+        $update_available = false;
+        $new_version = '';
+        if ( is_object( $update_plugins ) && ! empty( $update_plugins->response[ $plugin_file ] ) ) {
+            $update_available = true;
+            $new_version = isset( $update_plugins->response[ $plugin_file ]->new_version ) ? (string) $update_plugins->response[ $plugin_file ]->new_version : '';
         }
         return array(
             'configured'       => self::is_repo_configured(),
@@ -146,6 +158,8 @@ class Xlocal_Bridge_Updater {
             'cached_version'   => isset( $cached['version'] ) ? (string) $cached['version'] : '',
             'cached_commit'    => isset( $cached['commit'] ) ? (string) $cached['commit'] : '',
             'cached_at'        => isset( $cached['published_at'] ) ? (string) $cached['published_at'] : '',
+            'update_available' => $update_available,
+            'new_version'      => $new_version,
         );
     }
 

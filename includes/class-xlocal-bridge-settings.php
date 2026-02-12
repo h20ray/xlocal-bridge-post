@@ -442,6 +442,8 @@ class Xlocal_Bridge_Settings {
             $cached_version = ! empty( $snapshot['cached_version'] ) ? $snapshot['cached_version'] : '-';
             $cached_commit = ! empty( $snapshot['cached_commit'] ) ? substr( $snapshot['cached_commit'], 0, 12 ) : '-';
             $installed_commit = ! empty( $snapshot['installed_commit'] ) ? substr( $snapshot['installed_commit'], 0, 12 ) : '-';
+            $update_available = ! empty( $snapshot['update_available'] );
+            $new_version = ! empty( $snapshot['new_version'] ) ? $snapshot['new_version'] : '';
             $action_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_check_updates_now' ), 'xlocal_check_updates_now' );
 
             echo '<tr><th scope="row">Updater Status</th><td>';
@@ -449,6 +451,17 @@ class Xlocal_Bridge_Settings {
             echo '<p>Channel: <code>' . esc_html( $channel ) . '</code>, Branch: <code>' . esc_html( $branch ) . '</code></p>';
             echo '<p>Installed Commit: <code>' . esc_html( $installed_commit ) . '</code></p>';
             echo '<p>Latest Cached Commit: <code>' . esc_html( $cached_commit ) . '</code>, Version: <code>' . esc_html( $cached_version ) . '</code></p>';
+            if ( $update_available ) {
+                $plugin_file = Xlocal_Bridge_Updater::plugin_file();
+                $upgrade_url = wp_nonce_url(
+                    self_admin_url( 'update.php?action=upgrade-plugin&plugin=' . urlencode( $plugin_file ) ),
+                    'upgrade-plugin_' . $plugin_file
+                );
+                echo '<p><strong>Update Available:</strong> <code>' . esc_html( $new_version ) . '</code></p>';
+                echo '<p><a href="' . esc_url( $upgrade_url ) . '" class="button button-primary">Update Plugin Now</a></p>';
+            } else {
+                echo '<p><strong>Update Available:</strong> <code>No</code></p>';
+            }
             echo '<p><a href="' . esc_url( $action_url ) . '" class="button button-secondary">Check Latest Updates Now</a></p>';
             echo '<p class="xlocal-field-hint">Forces GitHub + WordPress update refresh and returns to this page with status notice.</p>';
             echo '</td></tr>';
