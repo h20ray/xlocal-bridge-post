@@ -16,6 +16,7 @@ class Xlocal_Bridge_Settings {
         add_action( 'admin_post_xlocal_check_updates_now', array( __CLASS__, 'handle_check_updates_now' ) );
         add_action( 'admin_post_xlocal_update_plugin_now', array( __CLASS__, 'handle_update_plugin_now' ) );
         add_action( 'admin_post_xlocal_clear_sender_debug_logs', array( __CLASS__, 'handle_clear_sender_debug_logs' ) );
+        add_action( 'admin_post_xlocal_clear_receiver_debug_logs', array( __CLASS__, 'handle_clear_receiver_debug_logs' ) );
         add_action( 'admin_post_xlocal_bulk_import_run', array( __CLASS__, 'handle_bulk_import' ) );
         add_action( 'admin_notices', array( __CLASS__, 'admin_notices' ) );
     }
@@ -56,6 +57,8 @@ class Xlocal_Bridge_Settings {
             'receiver_enable_log' => 0,
             'receiver_log_storage' => 'postmeta',
             'receiver_retain_logs_days' => 30,
+            'receiver_debug_log_history' => '',
+            'receiver_prepend_featured_if_missing' => 1,
 
             // Sender
             'sender_main_base_url' => '',
@@ -140,6 +143,7 @@ class Xlocal_Bridge_Settings {
             'receiver_strip_inline_styles',
             'receiver_strip_scripts_iframes',
             'receiver_enable_log',
+            'receiver_prepend_featured_if_missing',
             'sender_auto_send',
             'sender_include_author',
             'sender_send_taxonomies',
@@ -197,6 +201,19 @@ class Xlocal_Bridge_Settings {
         $merged['sender_max_payload_kb'] = max( 64, min( 10240, intval( $merged['sender_max_payload_kb'] ) ) );
         $merged['sender_batch_size'] = max( 1, min( 100, intval( $merged['sender_batch_size'] ) ) );
 
+        $existing = self::get_options();
+        $runtime_keys = array(
+            'sender_last_push_result',
+            'sender_debug_log_history',
+            'sender_debug_payload_history',
+            'receiver_debug_log_history',
+        );
+        foreach ( $runtime_keys as $runtime_key ) {
+            if ( ! isset( $input[ $runtime_key ] ) && isset( $existing[ $runtime_key ] ) ) {
+                $merged[ $runtime_key ] = $existing[ $runtime_key ];
+            }
+        }
+
         return $merged;
     }
 
@@ -228,6 +245,10 @@ class Xlocal_Bridge_Settings {
             $tabs['receiver'] = array(
                 'label' => 'Receiver',
                 'desc' => 'Security, content policy, and media rules for ingest.',
+            );
+            $tabs['receiver_debug'] = array(
+                'label' => 'Receiver Debug',
+                'desc' => 'Content-aware ingest diagnostics.',
             );
         }
         if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
@@ -287,6 +308,7 @@ class Xlocal_Bridge_Settings {
         self::render_overview_tab( $mode, $options );
         if ( in_array( $mode, array( 'receiver', 'both' ), true ) ) {
             self::render_receiver_tab();
+            self::render_receiver_debug_tab( isset( $options['receiver_debug_log_history'] ) ? $options['receiver_debug_log_history'] : '' );
         }
         if ( in_array( $mode, array( 'sender', 'both' ), true ) ) {
             self::render_sender_tab();
@@ -396,6 +418,44 @@ class Xlocal_Bridge_Settings {
         self::render_field( 'receiver_allowed_media_domains', 'Allowed Media Domains', 'textarea', 'Example: cdn.example.com' );
         self::render_field( 'receiver_reject_non_allowed_media', 'Reject Non-Allowed <img src>', 'checkbox', 'Strictly enforce CDN-only media.' );
         self::render_field( 'receiver_featured_image_mode', 'Featured Image Mode', 'select_featured_mode', 'Meta-only or virtual attachment.' );
+        self::render_field( 'receiver_prepend_featured_if_missing', 'Prepend Featured Image If Content Has No Image', 'checkbox', 'If incoming content has no <img>, prepend featured image at top.' );
+        echo '</table>';
+        echo '</div>';
+    }
+
+    private static function render_receiver_debug_tab( $receiver_debug_log_history ) {
+        echo '<div class="xlocal-tab-panel" data-tab-panel="receiver_debug" id="xlocal-panel-receiver_debug" role="tabpanel" aria-labelledby="xlocal-tab-receiver_debug">';
+        echo '<div class="xlocal-section-header">';
+        echo '<h2>Receiver Debug</h2>';
+        echo '<p>Content-aware ingest logs: images, hosts, featured handling, taxonomy, and ingest result.</p>';
+        echo '</div>';
+        echo '<table class="form-table" role="presentation">';
+        echo '<tr><th scope="row">Receiver Ingest Log</th><td>';
+        $lines = array_filter( explode( "\n", (string) $receiver_debug_log_history ) );
+        if ( empty( $lines ) ) {
+            echo '<p>No receiver debug entries yet. Enable "Enable Ingest Log" in Advanced, then ingest one post.</p>';
+        } else {
+            $lines = array_reverse( $lines );
+            foreach ( $lines as $line ) {
+                $entry = json_decode( $line, true );
+                if ( ! is_array( $entry ) ) {
+                    continue;
+                }
+                $ts = ! empty( $entry['timestamp_utc'] ) ? sanitize_text_field( (string) $entry['timestamp_utc'] ) . ' UTC' : '-';
+                $status = ! empty( $entry['status'] ) ? sanitize_text_field( (string) $entry['status'] ) : 'info';
+                $message = ! empty( $entry['message'] ) ? sanitize_text_field( (string) $entry['message'] ) : '';
+                echo '<div style="border:1px solid #dcdcde;border-radius:8px;padding:12px;margin-bottom:12px;background:#fff;">';
+                echo '<p><strong>' . esc_html( strtoupper( $status ) ) . '</strong> | ' . esc_html( $ts ) . '</p>';
+                echo '<p>' . esc_html( $message ) . '</p>';
+                if ( ! empty( $entry['context'] ) && is_array( $entry['context'] ) ) {
+                    echo '<textarea readonly rows="10" style="font-family:Menlo,Consolas,monospace;">' . esc_textarea( wp_json_encode( $entry['context'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) ) . '</textarea>';
+                }
+                echo '</div>';
+            }
+        }
+        $clear_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_clear_receiver_debug_logs' ), 'xlocal_clear_receiver_debug_logs' );
+        echo '<p><a href="' . esc_url( $clear_url ) . '" class="button button-secondary">Clear Receiver Debug Data</a></p>';
+        echo '</td></tr>';
         echo '</table>';
         echo '</div>';
     }
@@ -565,15 +625,14 @@ class Xlocal_Bridge_Settings {
             echo '<p>Installed Commit: <code>' . esc_html( $installed_commit ) . '</code></p>';
             echo '<p>Latest Cached Commit: <code>' . esc_html( $cached_commit ) . '</code>, Version: <code>' . esc_html( $cached_version ) . '</code></p>';
             if ( $update_available ) {
-                $plugin_file = Xlocal_Bridge_Updater::plugin_file();
                 $upgrade_url = wp_nonce_url( admin_url( 'admin-post.php?action=xlocal_update_plugin_now' ), 'xlocal_update_plugin_now' );
                 echo '<p><strong>Update Available:</strong> <code>' . esc_html( $new_version ) . '</code></p>';
-                echo '<p><a href="' . esc_url( $upgrade_url ) . '" class="button button-primary">Update Plugin Now</a></p>';
+                echo '<p><a href="' . esc_url( $upgrade_url ) . '" class="button button-primary">Open Core Plugin Updates</a></p>';
             } else {
                 echo '<p><strong>Update Available:</strong> <code>No</code></p>';
             }
             echo '<p><a href="' . esc_url( $action_url ) . '" class="button button-secondary">Check Latest Updates Now</a></p>';
-            echo '<p class="xlocal-field-hint">Forces GitHub + WordPress update refresh and returns to this page with status notice.</p>';
+            echo '<p class="xlocal-field-hint">Forces GitHub + WordPress update refresh. Use "Open Core Plugin Updates" to update from WordPress core updater screen.</p>';
             echo '</td></tr>';
         }
         echo '</table>';
@@ -1261,7 +1320,7 @@ class Xlocal_Bridge_Settings {
         }
         $nonce = isset( $_REQUEST['_wpnonce'] ) ? sanitize_text_field( (string) $_REQUEST['_wpnonce'] ) : '';
         if ( ! wp_verify_nonce( $nonce, 'xlocal_update_plugin_now' ) ) {
-            self::set_notice( 'Security token expired. Please open Logs tab and click "Update Plugin Now" again.', 'error' );
+            self::set_notice( 'Security token expired. Please open Logs tab and click "Open Core Plugin Updates" again.', 'error' );
             wp_safe_redirect( add_query_arg( 'xlocal_tab', 'logs', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
             exit;
         }
@@ -1279,12 +1338,8 @@ class Xlocal_Bridge_Settings {
             Xlocal_Bridge_Updater::set_pending_commit( '' );
         }
 
-        $plugin_file = Xlocal_Bridge_Updater::plugin_file();
-        $upgrade_url = wp_nonce_url(
-            self_admin_url( 'update.php?action=upgrade-plugin&plugin=' . urlencode( $plugin_file ) ),
-            'upgrade-plugin_' . $plugin_file
-        );
-        wp_safe_redirect( $upgrade_url );
+        self::set_notice( 'Update metadata refreshed. Continue update from WordPress core Plugin Updates screen.', 'success' );
+        wp_safe_redirect( self_admin_url( 'update-core.php' ) );
         exit;
     }
 
@@ -1306,6 +1361,27 @@ class Xlocal_Bridge_Settings {
 
         self::set_notice( 'Sender debug data cleared.', 'success' );
         $tab = in_array( $options['mode'], array( 'sender', 'both' ), true ) ? 'sender_debug' : 'logs';
+        wp_safe_redirect( add_query_arg( 'xlocal_tab', $tab, admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
+        exit;
+    }
+
+    public static function handle_clear_receiver_debug_logs() {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_die( 'Unauthorized' );
+        }
+        $nonce = isset( $_REQUEST['_wpnonce'] ) ? sanitize_text_field( (string) $_REQUEST['_wpnonce'] ) : '';
+        if ( ! wp_verify_nonce( $nonce, 'xlocal_clear_receiver_debug_logs' ) ) {
+            self::set_notice( 'Security token expired. Please retry from the Receiver Debug tab.', 'error' );
+            wp_safe_redirect( add_query_arg( 'xlocal_tab', 'receiver_debug', admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
+            exit;
+        }
+
+        $options = self::get_options();
+        $options['receiver_debug_log_history'] = '';
+        update_option( self::OPTION_KEY, $options );
+
+        self::set_notice( 'Receiver debug data cleared.', 'success' );
+        $tab = in_array( $options['mode'], array( 'receiver', 'both' ), true ) ? 'receiver_debug' : 'logs';
         wp_safe_redirect( add_query_arg( 'xlocal_tab', $tab, admin_url( 'options-general.php?page=xlocal-bridge-post' ) ) );
         exit;
     }

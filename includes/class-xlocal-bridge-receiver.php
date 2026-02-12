@@ -29,32 +29,46 @@ class Xlocal_Bridge_Receiver {
         $options = Xlocal_Bridge_Settings::get_options();
 
         if ( $options['mode'] === 'sender' || empty( $options['receiver_enabled'] ) ) {
+            self::log_ingest( $options, 'error', 'Receiver disabled; ingest rejected.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'receiver_disabled' ), 503 );
         }
 
         if ( ! empty( $options['receiver_require_tls'] ) && ! is_ssl() ) {
+            self::log_ingest( $options, 'error', 'TLS required; ingest rejected.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'tls_required' ), 400 );
         }
 
         $secret = Xlocal_Bridge_Settings::get_receiver_secret();
         if ( empty( $secret ) ) {
+            self::log_ingest( $options, 'error', 'Receiver secret missing; ingest rejected.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'missing_secret' ), 500 );
         }
 
         if ( ! self::check_rate_limit( $options ) ) {
+            self::log_ingest( $options, 'error', 'Rate limited ingest.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'rate_limited' ), 429 );
         }
 
         if ( ! self::check_ip_allowlist( $options ) ) {
+            self::log_ingest(
+                $options,
+                'error',
+                'IP not in allowlist.',
+                array(
+                    'remote_ip' => isset( $_SERVER['REMOTE_ADDR'] ) ? sanitize_text_field( (string) $_SERVER['REMOTE_ADDR'] ) : '',
+                )
+            );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'ip_not_allowed' ), 403 );
         }
 
         $raw_body = file_get_contents( 'php://input' );
         if ( $raw_body === false ) {
+            self::log_ingest( $options, 'error', 'Ingest empty body.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'empty_body' ), 400 );
         }
         $max_kb = max( 64, intval( $options['receiver_max_payload_kb'] ) );
         if ( strlen( $raw_body ) > ( $max_kb * 1024 ) ) {
+            self::log_ingest( $options, 'error', 'Payload too large.', array( 'bytes' => strlen( $raw_body ), 'limit_kb' => $max_kb ) );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'payload_too_large' ), 413 );
         }
 
@@ -65,38 +79,64 @@ class Xlocal_Bridge_Receiver {
         $local_host = wp_parse_url( home_url(), PHP_URL_HOST );
 
         if ( $origin_host !== '' && $local_host && strtolower( $origin_host ) === strtolower( $local_host ) ) {
+            self::log_ingest( $options, 'error', 'Self-origin request rejected.', array( 'origin_host' => $origin_host ) );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'self_origin_rejected' ), 409 );
         }
 
         if ( ! self::verify_timestamp_nonce( $timestamp, $nonce, $options ) ) {
+            self::log_ingest( $options, 'error', 'Invalid timestamp/nonce.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'invalid_timestamp_or_nonce' ), 401 );
         }
 
         if ( ! self::verify_signature( $secret, $timestamp, $nonce, $raw_body, $signature ) ) {
+            self::log_ingest( $options, 'error', 'Invalid signature.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'invalid_signature' ), 401 );
         }
         self::remember_nonce( $nonce, $options );
 
         $payload = json_decode( $raw_body, true );
         if ( ! is_array( $payload ) ) {
+            self::log_ingest( $options, 'error', 'Invalid JSON payload.', array() );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'invalid_json' ), 400 );
         }
 
         $required = array( 'ingest_id', 'source_url', 'title', 'content_html' );
         foreach ( $required as $field ) {
             if ( empty( $payload[ $field ] ) ) {
+                self::log_ingest( $options, 'error', 'Payload missing required field.', array( 'field' => $field ) );
                 return new WP_REST_Response( array( 'success' => false, 'error' => 'missing_field', 'field' => $field ), 400 );
             }
         }
 
+        $content_insight = self::build_content_insight( $payload );
         if ( ! self::validate_media_domains( $payload, $options ) ) {
+            self::log_ingest( $options, 'error', 'Media domain rejected by allowlist.', $content_insight );
             return new WP_REST_Response( array( 'success' => false, 'error' => 'media_domain_not_allowed' ), 400 );
         }
 
         $post_id = self::upsert_post( $payload, $options );
         if ( is_wp_error( $post_id ) ) {
+            self::log_ingest( $options, 'error', 'Upsert failed: ' . $post_id->get_error_message(), $content_insight );
             return new WP_REST_Response( array( 'success' => false, 'error' => $post_id->get_error_message() ), 500 );
         }
+
+        self::log_ingest(
+            $options,
+            'success',
+            'Ingest completed.',
+            array_merge(
+                $content_insight,
+                array(
+                    'ingest_id' => isset( $payload['ingest_id'] ) ? sanitize_text_field( (string) $payload['ingest_id'] ) : '',
+                    'source_url' => isset( $payload['source_url'] ) ? esc_url_raw( (string) $payload['source_url'] ) : '',
+                    'post_id' => isset( $post_id['post_id'] ) ? intval( $post_id['post_id'] ) : 0,
+                    'action' => isset( $post_id['action'] ) ? sanitize_text_field( (string) $post_id['action'] ) : '',
+                    'prepend_featured_applied' => ! empty( $post_id['prepend_featured_applied'] ),
+                    'featured_mode' => isset( $post_id['featured_mode'] ) ? sanitize_text_field( (string) $post_id['featured_mode'] ) : '',
+                    'featured_status' => isset( $post_id['featured_status'] ) ? sanitize_text_field( (string) $post_id['featured_status'] ) : '',
+                )
+            )
+        );
 
         return new WP_REST_Response(
             array(
@@ -291,6 +331,9 @@ class Xlocal_Bridge_Receiver {
         $content = is_string( $payload['content_html'] ) ? $payload['content_html'] : '';
         $excerpt = isset( $payload['excerpt'] ) ? sanitize_text_field( $payload['excerpt'] ) : '';
 
+        $prepend_featured_applied = false;
+        $content = self::maybe_prepend_featured_image_to_content( $content, $payload, $options, $prepend_featured_applied );
+
         if ( ! empty( $options['receiver_sanitize_html'] ) ) {
             $content = self::sanitize_html( $content, $options );
         }
@@ -357,7 +400,13 @@ class Xlocal_Bridge_Receiver {
 
         self::apply_taxonomies( $post_id, $payload, $options );
 
-        return array( 'post_id' => $post_id, 'action' => $action );
+        return array(
+            'post_id' => $post_id,
+            'action' => $action,
+            'prepend_featured_applied' => $prepend_featured_applied ? 1 : 0,
+            'featured_mode' => get_post_meta( $post_id, '_xlocal_featured_image_mode', true ),
+            'featured_status' => get_post_meta( $post_id, '_xlocal_featured_image_ingest_status', true ),
+        );
     }
 
     private static function should_update_content( $post_id, $options ) {
@@ -458,7 +507,13 @@ class Xlocal_Bridge_Receiver {
     }
 
     private static function normalize_terms( $terms, $mapping_rules, $normalize ) {
-        $terms = array_map( 'sanitize_text_field', $terms );
+        $terms = array_map(
+            function( $term ) {
+                $decoded = html_entity_decode( (string) $term, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+                return sanitize_text_field( $decoded );
+            },
+            $terms
+        );
         $map = self::parse_mapping_rules( $mapping_rules );
         if ( ! empty( $map ) ) {
             $terms = array_map( function( $term ) use ( $map ) {
@@ -603,6 +658,101 @@ class Xlocal_Bridge_Receiver {
             $html = preg_replace( '/\sstyle=("|\')[^"\']*("|\')/i', '', $html );
         }
         return $html;
+    }
+
+    private static function maybe_prepend_featured_image_to_content( $content, $payload, $options, &$applied ) {
+        $applied = false;
+        if ( empty( $options['receiver_prepend_featured_if_missing'] ) ) {
+            return $content;
+        }
+        if ( ! empty( self::extract_img_srcs( $content ) ) ) {
+            return $content;
+        }
+        if ( empty( $payload['featured_image']['url'] ) ) {
+            return $content;
+        }
+        $img_url = esc_url_raw( (string) $payload['featured_image']['url'] );
+        if ( $img_url === '' ) {
+            return $content;
+        }
+
+        $alt = '';
+        if ( ! empty( $payload['featured_image']['alt'] ) ) {
+            $alt = sanitize_text_field( (string) $payload['featured_image']['alt'] );
+        }
+        $width = ! empty( $payload['featured_image']['width'] ) ? intval( $payload['featured_image']['width'] ) : 0;
+        $height = ! empty( $payload['featured_image']['height'] ) ? intval( $payload['featured_image']['height'] ) : 0;
+        $img_html = '<p><img src="' . esc_url( $img_url ) . '" alt="' . esc_attr( $alt ) . '"';
+        if ( $width > 0 ) {
+            $img_html .= ' width="' . intval( $width ) . '"';
+        }
+        if ( $height > 0 ) {
+            $img_html .= ' height="' . intval( $height ) . '"';
+        }
+        $img_html .= ' loading="eager" /></p>';
+        $applied = true;
+        return $img_html . "\n" . $content;
+    }
+
+    private static function build_content_insight( $payload ) {
+        $content_html = isset( $payload['content_html'] ) && is_string( $payload['content_html'] ) ? $payload['content_html'] : '';
+        $content_urls = self::extract_img_srcs( $content_html );
+        $manifest_urls = array();
+        if ( ! empty( $payload['media_manifest'] ) && is_array( $payload['media_manifest'] ) ) {
+            foreach ( $payload['media_manifest'] as $item ) {
+                if ( ! empty( $item['url'] ) ) {
+                    $manifest_urls[] = esc_url_raw( (string) $item['url'] );
+                }
+            }
+        }
+        $featured_url = '';
+        if ( ! empty( $payload['featured_image']['url'] ) ) {
+            $featured_url = esc_url_raw( (string) $payload['featured_image']['url'] );
+        }
+        return array(
+            'content_bytes' => strlen( $content_html ),
+            'content_image_count' => count( $content_urls ),
+            'content_image_hosts' => self::host_list( $content_urls ),
+            'manifest_count' => count( $manifest_urls ),
+            'manifest_hosts' => self::host_list( $manifest_urls ),
+            'featured_host' => strtolower( (string) wp_parse_url( $featured_url, PHP_URL_HOST ) ),
+            'has_featured_payload' => $featured_url !== '',
+        );
+    }
+
+    private static function host_list( $urls ) {
+        $hosts = array();
+        foreach ( (array) $urls as $url ) {
+            $host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+            if ( $host !== '' ) {
+                $hosts[ $host ] = true;
+            }
+        }
+        return array_keys( $hosts );
+    }
+
+    private static function log_ingest( $options, $status, $message, $context ) {
+        if ( empty( $options['receiver_enable_log'] ) ) {
+            return;
+        }
+        $stored = Xlocal_Bridge_Settings::get_options();
+        $existing = isset( $stored['receiver_debug_log_history'] ) ? (string) $stored['receiver_debug_log_history'] : '';
+        $lines = array_filter( explode( "\n", $existing ) );
+        $entry = array(
+            'timestamp_utc' => gmdate( 'Y-m-d H:i:s' ),
+            'status' => sanitize_key( (string) $status ),
+            'message' => sanitize_text_field( (string) $message ),
+            'context' => is_array( $context ) ? $context : array(),
+        );
+        $line = wp_json_encode( $entry );
+        if ( is_string( $line ) && $line !== '' ) {
+            $lines[] = $line;
+        }
+        $retain = isset( $stored['receiver_retain_logs_days'] ) ? intval( $stored['receiver_retain_logs_days'] ) : 30;
+        $cap = max( 50, min( 1000, $retain * 20 ) );
+        $lines = array_slice( $lines, -$cap );
+        $stored['receiver_debug_log_history'] = implode( "\n", $lines );
+        update_option( Xlocal_Bridge_Settings::OPTION_KEY, $stored );
     }
 
     private static function allowed_tags_profile( $options ) {
