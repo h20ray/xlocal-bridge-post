@@ -135,6 +135,12 @@ class Xlocal_Bridge_Receiver {
                     'featured_mode' => isset( $post_id['featured_mode'] ) ? sanitize_text_field( (string) $post_id['featured_mode'] ) : '',
                     'featured_status' => isset( $post_id['featured_status'] ) ? sanitize_text_field( (string) $post_id['featured_status'] ) : '',
                     'featured_error' => isset( $post_id['featured_error'] ) ? sanitize_text_field( (string) $post_id['featured_error'] ) : '',
+                    'category_assigned_count' => isset( $post_id['category_assigned_count'] ) ? intval( $post_id['category_assigned_count'] ) : 0,
+                    'tag_assigned_count' => isset( $post_id['tag_assigned_count'] ) ? intval( $post_id['tag_assigned_count'] ) : 0,
+                    'category_taxonomy_supported' => ! empty( $post_id['category_taxonomy_supported'] ),
+                    'tag_taxonomy_supported' => ! empty( $post_id['tag_taxonomy_supported'] ),
+                    'category_taxonomy_error' => isset( $post_id['category_taxonomy_error'] ) ? sanitize_text_field( (string) $post_id['category_taxonomy_error'] ) : '',
+                    'tag_taxonomy_error' => isset( $post_id['tag_taxonomy_error'] ) ? sanitize_text_field( (string) $post_id['tag_taxonomy_error'] ) : '',
                 )
             )
         );
@@ -404,7 +410,7 @@ class Xlocal_Bridge_Receiver {
 
         update_post_meta( $post_id, self::META_LAST_INGESTED_AT, $now_gmt );
 
-        self::apply_taxonomies( $post_id, $payload, $options );
+        $taxonomy_result = self::apply_taxonomies( $post_id, $payload, $options );
 
         return array(
             'post_id' => $post_id,
@@ -413,6 +419,12 @@ class Xlocal_Bridge_Receiver {
             'featured_mode' => $featured_result['mode'] !== '' ? $featured_result['mode'] : get_post_meta( $post_id, '_xlocal_featured_image_mode', true ),
             'featured_status' => $featured_result['status'] !== '' ? $featured_result['status'] : get_post_meta( $post_id, '_xlocal_featured_image_ingest_status', true ),
             'featured_error' => $featured_result['error'] !== '' ? $featured_result['error'] : get_post_meta( $post_id, '_xlocal_featured_image_ingest_error', true ),
+            'category_assigned_count' => isset( $taxonomy_result['category_assigned_count'] ) ? intval( $taxonomy_result['category_assigned_count'] ) : 0,
+            'tag_assigned_count' => isset( $taxonomy_result['tag_assigned_count'] ) ? intval( $taxonomy_result['tag_assigned_count'] ) : 0,
+            'category_taxonomy_supported' => ! empty( $taxonomy_result['category_taxonomy_supported'] ) ? 1 : 0,
+            'tag_taxonomy_supported' => ! empty( $taxonomy_result['tag_taxonomy_supported'] ) ? 1 : 0,
+            'category_taxonomy_error' => isset( $taxonomy_result['category_taxonomy_error'] ) ? sanitize_text_field( (string) $taxonomy_result['category_taxonomy_error'] ) : '',
+            'tag_taxonomy_error' => isset( $taxonomy_result['tag_taxonomy_error'] ) ? sanitize_text_field( (string) $taxonomy_result['tag_taxonomy_error'] ) : '',
         );
     }
 
@@ -496,21 +508,54 @@ class Xlocal_Bridge_Receiver {
     }
 
     private static function apply_taxonomies( $post_id, $payload, $options ) {
+        $result = array(
+            'category_assigned_count' => 0,
+            'tag_assigned_count' => 0,
+            'category_taxonomy_supported' => false,
+            'tag_taxonomy_supported' => false,
+            'category_taxonomy_error' => '',
+            'tag_taxonomy_error' => '',
+        );
+
+        $post_type = get_post_type( $post_id );
+
         if ( ! empty( $payload['categories'] ) && is_array( $payload['categories'] ) ) {
             $cats = self::normalize_terms( $payload['categories'], $options['receiver_category_mapping_rules'], $options['receiver_tag_normalization'] );
-            if ( $options['receiver_auto_create_categories'] ) {
-                self::ensure_terms_exist( $cats, 'category' );
+            $result['category_taxonomy_supported'] = (bool) is_object_in_taxonomy( $post_type, 'category' );
+            if ( ! $result['category_taxonomy_supported'] ) {
+                $result['category_taxonomy_error'] = 'Taxonomy "category" is not registered for post type "' . sanitize_key( (string) $post_type ) . '".';
+            } else {
+                if ( $options['receiver_auto_create_categories'] ) {
+                    self::ensure_terms_exist( $cats, 'category' );
+                }
+                $set_cats = wp_set_post_terms( $post_id, $cats, 'category', false );
+                if ( is_wp_error( $set_cats ) ) {
+                    $result['category_taxonomy_error'] = $set_cats->get_error_message();
+                } elseif ( is_array( $set_cats ) ) {
+                    $result['category_assigned_count'] = count( $set_cats );
+                }
             }
-            wp_set_post_terms( $post_id, $cats, 'category', false );
         }
 
         if ( ! empty( $payload['tags'] ) && is_array( $payload['tags'] ) ) {
             $tags = self::normalize_terms( $payload['tags'], '', $options['receiver_tag_normalization'] );
-            if ( $options['receiver_auto_create_tags'] ) {
-                self::ensure_terms_exist( $tags, 'post_tag' );
+            $result['tag_taxonomy_supported'] = (bool) is_object_in_taxonomy( $post_type, 'post_tag' );
+            if ( ! $result['tag_taxonomy_supported'] ) {
+                $result['tag_taxonomy_error'] = 'Taxonomy "post_tag" is not registered for post type "' . sanitize_key( (string) $post_type ) . '".';
+            } else {
+                if ( $options['receiver_auto_create_tags'] ) {
+                    self::ensure_terms_exist( $tags, 'post_tag' );
+                }
+                $set_tags = wp_set_post_terms( $post_id, $tags, 'post_tag', false );
+                if ( is_wp_error( $set_tags ) ) {
+                    $result['tag_taxonomy_error'] = $set_tags->get_error_message();
+                } elseif ( is_array( $set_tags ) ) {
+                    $result['tag_assigned_count'] = count( $set_tags );
+                }
             }
-            wp_set_post_terms( $post_id, $tags, 'post_tag', false );
         }
+
+        return $result;
     }
 
     private static function normalize_terms( $terms, $mapping_rules, $normalize ) {
@@ -767,6 +812,8 @@ class Xlocal_Bridge_Receiver {
             'manifest_hosts' => self::host_list( $manifest_urls ),
             'featured_host' => strtolower( (string) wp_parse_url( $featured_url, PHP_URL_HOST ) ),
             'has_featured_payload' => $featured_url !== '',
+            'payload_category_count' => ( ! empty( $payload['categories'] ) && is_array( $payload['categories'] ) ) ? count( $payload['categories'] ) : 0,
+            'payload_tag_count' => ( ! empty( $payload['tags'] ) && is_array( $payload['tags'] ) ) ? count( $payload['tags'] ) : 0,
         );
     }
 
